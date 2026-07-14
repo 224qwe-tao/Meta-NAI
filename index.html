@@ -1,0 +1,693 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖片元數據提取器(V20251025)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/exifreader@4.28.0/dist/exif-reader.min.js"></script>
+    <!-- Removed pretty-bytes CDN - relying on fallback -->
+
+    <style>
+        body { font-family: sans-serif; background-color: #f0f2f5; color: #333; }
+        pre {
+            clear: both;
+            white-space: pre-wrap; word-wrap: break-word;
+            background-color: #f8f9fa; border: 1px solid #dee2e6;
+            border-radius: 0.25rem; padding: 0.75rem;
+            margin-top: 0.5rem;
+            font-size: 0.8rem; /* Smaller base font size for mobile */
+            line-height: 1.5;
+        }
+        @media (min-width: 768px) {
+            pre {
+                font-size: 0.875rem; /* text-sm equivalent */
+                padding: 1rem;
+            }
+        }
+        pre.other-text-chunks-pre { padding-top: 0.5rem; }
+        pre.other-text-chunks-pre strong { display: block; margin-bottom: 0.25rem; color: #4A5568; }
+        pre.other-text-chunks-pre .chunk-value { display: block; padding-left: 1rem; margin-bottom: 0.75rem; border-left: 2px solid #e2e8f0; padding-top: 0.25rem; padding-bottom: 0.25rem; overflow-wrap: break-word; word-break: break-all; }
+        pre.other-text-chunks-pre .chunk-value pre { margin-top: 0; padding: 0.5rem; font-size: 0.9em; border: none; background-color: #e9ecef; }
+        .spinner { border: 4px solid rgba(0, 0, 0, 0.1); width: 24px; height: 24px; border-radius: 50%; border-left-color: #09f; animation: spin 1s ease infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .copy-feedback { display: inline-block; min-width: 55px; text-align: left; font-size: 0.75rem; vertical-align: middle; }
+        .result-block { border: 1px solid #e2e8f0; border-radius: 0.375rem; padding: 1rem; margin-bottom: 1.5rem; background-color: white; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06); }
+        .result-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0; }
+        .result-filename { font-weight: 600; color: #4a5568; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; margin-bottom: 0.25rem; }
+        .result-fileinfo { font-size: 0.8rem; color: #718096; text-align: right; flex-shrink: 0; margin-left: 0.5rem; }
+        @media (min-width: 768px) { .result-header { flex-wrap: nowrap; } .result-filename { max-width: 60%; margin-bottom: 0; } }
+        .processing-indicator { color: #718096; font-size: 0.875rem; }
+        #dropZone { border: 2px dashed #cbd5e0; border-radius: 0.5rem; padding: 2rem; text-align: center; color: #718096; margin-bottom: 1rem; background-color: #f7fafc; transition: background-color 0.2s ease; }
+        #dropZone.dragover { background-color: #ebf8ff; border-color: #63b3ed; }
+        #clearResultsBtn { display: none; margin-top: 1rem; }
+        .json-key { color: #a31515; font-weight: bold; }
+        .json-string { color: #008000; }
+        .json-number { color: #0000ff; }
+        .json-boolean { color: #800080; font-style: italic; }
+        .json-null { color: #ff8c00; font-style: italic; }
+        .metadata-block { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #eee; }
+        .metadata-title { font-size: 1rem; font-weight: bold; margin-bottom: 0.5rem; color: #1a73e8; display: inline-block; }
+        .nai-format-attempt-title { font-size: 1rem; font-weight: bold; margin-bottom: 0.5rem; color: #dd6b20; display: inline-block; }
+        .copy-button { display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.75rem; margin-left: 0.5rem; cursor: pointer; background-color: #e0e0e0; border: 1px solid #ccc; border-radius: 4px; transition: background-color 0.2s; vertical-align: middle; }
+        .copy-button:hover { background-color: #d0d0d0; }
+        .error-message { color: #d93025; background-color: #fce8e6; border: 1px solid #fcc1b9; padding: 0.8rem; border-radius: 4px; margin-top: 1rem; font-size: 0.9em; }
+        .info-message { color: #374151; background-color: #f3f4f6; border: 1px solid #d1d5db; padding: 0.8rem; border-radius: 4px; margin-top: 1rem; font-size: 0.9em; }
+        .image-preview { margin-top: 0.5rem; margin-bottom: 1rem; max-width: 200px; max-height: 200px; object-fit: contain; border: 1px solid #e2e8f0; border-radius: 4px; display: block; }
+        /* Style for temporary textarea used for copying */
+        .copy-textarea { position: fixed; top: -9999px; left: -9999px; width: 2em; height: 2em; padding: 0; border: none; outline: none; box-shadow: none; background: transparent; }
+        /* Styles for collapsible JSON view */
+        .collapsible-pre {
+            max-height: 6.5rem; /* ~4 lines with padding */
+            overflow-y: hidden;
+            transition: max-height 0.3s ease-in-out;
+            border-bottom: none;
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .collapsible-pre.expanded {
+            max-height: 150vh; /* A large value, effectively removing the limit */
+            overflow-y: auto; /* 允许在内容超长时滚动 */
+            border-bottom: 1px solid #dee2e6;
+            border-bottom-left-radius: 0.25rem;
+            border-bottom-right-radius: 0.25rem;
+        }
+        .toggle-view-button {
+            border: 1px solid #dee2e6;
+            border-top: 1px dashed #cbd5e0;
+            background-color: #f0f9ff;
+            color: #3b82f6;
+            padding: 0.25rem;
+            text-align: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 0 0 0.25rem 0.25rem;
+            margin-top: -1px; /* Overlap the container a bit */
+            transition: background-color 0.2s ease;
+        }
+        .toggle-view-button:hover {
+            background-color: #e0f2fe;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-2 sm:p-4 md:p-8">
+    <div class="container mx-auto max-w-4xl bg-white p-4 sm:p-6 rounded-lg shadow-md">
+        <h1 class="text-xl sm:text-2xl font-bold mb-4 text-gray-800">图片元数据提取器(V20251025)</h1>
+        <p class="text-xs sm:text-sm text-gray-600 mb-4">选择、拖放或粘贴 PNG/JPG/WEBP 图片。最新结果显示在上方。</p>
+
+        <div id="dropZone">
+            <p class="font-semibold">将图片拖放到此处</p>
+            <p class="text-xs mt-1">或者</p>
+            <label for="fileInput" class="mt-2 inline-block bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded cursor-pointer text-sm">
+                选择文件
+            </label>
+             <p class="text-xs mt-2">(支持 PNG, JPG/JPEG, WEBP。可粘贴图片)</p>
+        </div>
+
+        <input type="file" id="fileInput" accept="image/png, image/jpeg, image/webp" multiple class="hidden">
+
+        <div id="globalLoadingIndicator" class="hidden text-center my-4 text-gray-600">
+             <div class="spinner"></div>
+             <span>正在处理图片...</span>
+        </div>
+
+        <div id="resultsContainer" class="mt-4"></div>
+
+         <button id="clearResultsBtn" onclick="clearResults()" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded text-sm">
+            清空所有结果
+         </button>
+
+        <canvas id="hiddenCanvas" style="display:none;"></canvas>
+    </div>
+
+    <script>
+        // --- Global Constants and Elements ---
+        const fileInput = document.getElementById('fileInput');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const globalLoadingIndicator = document.getElementById('globalLoadingIndicator');
+        const canvas = document.getElementById('hiddenCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const dropZone = document.getElementById('dropZone');
+        const clearBtn = document.getElementById('clearResultsBtn');
+        const magic = "stealth_pngcomp";
+        let processingCounter = 0;
+        const activePreviews = new Set();
+
+        // --- Initialize prettyBytes Fallback ---
+        if (typeof window.prettyBytes !== 'function') {
+            console.warn("pretty-bytes not loaded. Using basic byte count fallback.");
+            window.prettyBytes = (bytes) => { /* ... (fallback code) ... */ if (typeof bytes !== 'number' || !Number.isFinite(bytes)) { return 'N/A bytes'; } if (bytes === 0) return '0 Bytes'; const k = 1024; const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']; const absBytes = Math.abs(bytes); const i = Math.max(0, Math.floor(Math.log(absBytes) / Math.log(k))); const formattedNumber = i === 0 ? absBytes : parseFloat((absBytes / Math.pow(k, i)).toFixed(1)); const sign = bytes < 0 ? '-' : ''; return sign + formattedNumber + ' ' + sizes[i]; };
+        } else { console.log("prettyBytes seems to be available."); }
+
+        // --- HTML Escaping Utility ---
+        function escapeHtml(unsafe) { /* ... (escape code) ... */ if (unsafe === null || unsafe === undefined) return ''; return String(unsafe).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+
+        // --- Core Logic (LSB Extraction - NO CHANGES) ---
+        function byteize(alphaLsbArray) { /* ... */ const length = Math.floor(alphaLsbArray.length / 8) * 8; if (length === 0) return new Uint8Array(0); const truncatedLsb = alphaLsbArray.slice(0, length); const packedBytes = new Uint8Array(length / 8); for (let i = 0; i < packedBytes.length; i++) { let byte = 0; for (let j = 0; j < 8; j++) { byte |= (truncatedLsb[i * 8 + j] << (7 - j)); } packedBytes[i] = byte; } return packedBytes; }
+        class LSBExtractor { /* ... */ constructor(imageData) { const width = imageData.width; const height = imageData.height; const pixelData = imageData.data; const alphaLsbColumnMajor = []; for (let x = 0; x < width; x++) { for (let y = 0; y < height; y++) { const pixelIndex = (y * width + x) * 4; const alphaValue = pixelData[pixelIndex + 3]; alphaLsbColumnMajor.push(alphaValue & 1); } } this.data = byteize(alphaLsbColumnMajor); this.pos = 0; console.log(`LSBExtractor (Column-Major): Image ${width}x${height}, Packed ${this.data.length} bytes.`); } getNextNBytes(n) { if (this.pos + n > this.data.length) { const available = this.data.length - this.pos; throw new Error(`尝试读取 ${n} 字节失败：数据不足 (需要 ${n}, 剩余 ${available})`); } const nBytes = this.data.slice(this.pos, this.pos + n); this.pos += n; return nBytes; } read32BitInteger() { const bytesList = this.getNextNBytes(4); const dataView = new DataView(bytesList.buffer, bytesList.byteOffset, bytesList.byteLength); return dataView.getUint32(0, false); } }
+        function extractMetadataFromImageData(imageData) { /* ... (LSB extraction logic - unchanged) ... */ console.log("尝试 LSB 提取..."); const reader = new LSBExtractor(imageData); const magicBytes = reader.getNextNBytes(magic.length); const readMagic = new TextDecoder("utf-8").decode(magicBytes); console.log(`LSB 读取到的 Magic: "${readMagic}"`); if (magic !== readMagic) { try { const peekReader = new LSBExtractor(imageData); const firstBytes = peekReader.data.slice(0, 30); console.error("LSB 提取到的原始数据前 30 字节 (十六进制):", [...firstBytes].map(b => b.toString(16).padStart(2, '0')).join(' ')); } catch(debugErr) {} throw new Error(`LSB Magic Number 不匹配：预期 "${magic}", 得到 "${readMagic}"`); } console.log("LSB Magic Number 匹配成功！"); const readLenBits = reader.read32BitInteger(); console.log(`LSB 读取到的压缩数据长度 (bits): ${readLenBits}`); const readLenBytes = Math.ceil(readLenBits / 8); if (readLenBytes <= 0 || !Number.isInteger(readLenBytes)) { throw new Error(`LSB 读取到的数据长度无效 (${readLenBits} bits -> ${readLenBytes} bytes)。`); } console.log(`LSB 预期读取 ${readLenBytes} 字节的压缩 JSON 数据。`); const compressedJsonData = reader.getNextNBytes(readLenBytes); console.log(`LSB 成功读取 ${compressedJsonData.length} 字节的压缩数据。`); if (compressedJsonData.length < readLenBytes) { console.warn(`LSB 警告：预期读取 ${readLenBytes} 字节，但实际只读取到 ${compressedJsonData.length} 字节。解压缩可能失败。`); } console.log("LSB 使用 pako 进行 Gzip 解压缩..."); const decompressedData = pako.inflate(compressedJsonData); console.log(`LSB Gzip 解压缩成功，得到 ${decompressedData.length} 字节的数据。`); const jsonDataString = new TextDecoder("utf-8").decode(decompressedData); console.log("LSB UTF-8 解码成功。"); const jsonData = JSON.parse(jsonDataString); console.log("LSB JSON 解析成功。"); if (jsonData.Comment && typeof jsonData.Comment === 'string') { try { jsonData.Comment = JSON.parse(jsonData.Comment); console.log("LSB 成功解析内嵌的 'Comment' JSON 字符串。"); } catch (e) { console.warn("LSB 无法将 'Comment' 字段解析为 JSON，将保持其为字符串。错误:", e.message); } } let yamlData = null; try { console.log("LSB 生成 YAML 数据..."); yamlData = jsyaml.dump(jsonData, { flowLevel: -1, sortKeys: false, lineWidth: -1 }); console.log("LSB YAML 生成成功。"); } catch (yamlError) { console.error("LSB 生成 YAML 时出错:", yamlError); } console.log("LSB 元数据提取完成。"); return { jsonData, yamlData }; }
+
+        // --- Formatting Logic (NAI Specific - Modified vt check) ---
+        const colMapRev = {'A': 0.1, 'B': 0.3, 'C': 0.5, 'D': 0.7, 'E': 0.9}; const rowMapRev = {'1': 0.1, '2': 0.3, '3': 0.5, '4': 0.7, '5': 0.9}; const toleranceRev = 1e-6; const defaultCoordsRev = { x: 0.5, y: 0.5 }; function isClose(a, b, tolerance) { return Math.abs(a - b) < tolerance; } function getPositionCodeRev(x, y, useCoordsFlag = true) { if (!useCoordsFlag) return ""; const isDefault = isClose(x, defaultCoordsRev.x, toleranceRev) && isClose(y, defaultCoordsRev.y, toleranceRev); if (isDefault) return ""; let foundCol = null, foundRow = null; for (const key in colMapRev) if (isClose(x, colMapRev[key], toleranceRev)) { foundCol = key; break; } for (const key in rowMapRev) if (isClose(y, rowMapRev[key], toleranceRev)) { foundRow = key; break; } return (foundCol && foundRow) ? `#${foundCol}${foundRow}` : ""; } function listsToStringStrictPairingV3(v4Prompt, v4Negative = null, baseString = "", useCoords = true) { if (!Array.isArray(v4Prompt)) { console.error("Error: v4_prompt input is not an array."); return baseString; } let pairParts = []; const negativeList = Array.isArray(v4Negative) ? v4Negative : []; for (let i = 0; i < v4Prompt.length; i++) { const promptItem = v4Prompt[i]; try { const pCaption = promptItem?.char_caption || ''; const centers = promptItem?.centers; let coords = defaultCoordsRev; if (centers && Array.isArray(centers) && centers.length > 0 && typeof centers[0] === 'object' && centers[0] !== null) { coords = { x: centers[0]?.x ?? defaultCoordsRev.x, y: centers[0]?.y ?? defaultCoordsRev.y }; } const positionCode = getPositionCodeRev(coords.x, coords.y, useCoords); const cPart = ` c=${pCaption}${positionCode}`; let ucPart = ""; if (i < negativeList.length) { const negativeItem = negativeList[i]; if (typeof negativeItem === 'object' && negativeItem !== null) { const nCaption = (negativeItem?.char_caption || '').trim(); if (nCaption) ucPart = ` uc=${nCaption}`; } } pairParts.push(cPart + ucPart); } catch (e) { console.error(`Error processing index ${i}: ${e}. Skipping this item.`); continue; } } const addedString = pairParts.join(""); let finalString = baseString || ""; const trailerMarkers = [" ntags=", " negprompt=", " neg=", " negative=", " #", " /"]; let insertPos = finalString.length; for (const marker of trailerMarkers) { try { const pos = finalString.indexOf(marker); if (pos !== -1) insertPos = Math.min(insertPos, pos); } catch (e) { console.error("Error finding marker:", e); break; } } finalString = finalString.substring(0, insertPos) + addedString + finalString.substring(insertPos); finalString = finalString.replace(/\s\s+/g, ' ').trim(); return finalString; }
+        
+        // --- MODIFICATION: Updated formatMetadataToText (Fix 1) ---
+        function formatMetadataToText(jsonData) {
+            if (!jsonData || typeof jsonData !== 'object') { return { txt: "格式化错误：输入不是有效的对象。", details: {} }; }
+            
+            // --- MODIFICATION START (Fix 1 & 2 Logic) ---
+            // Determine the *actual* object that holds the parameters (steps, uc, etc.)
+            let effectiveComment;
+            if (jsonData.Comment && typeof jsonData.Comment === 'object') {
+                // This is the standard LSB format, or a fallback where Comment was correctly parsed and nested.
+                effectiveComment = jsonData.Comment;
+                console.log("formatMetadataToText: Using nested 'Comment' object.");
+            } else {
+                // This is a fallback format (PNG chunk, or faked EXIF object)
+                // jsonData itself *is* the comment object.
+                effectiveComment = jsonData;
+                console.log("formatMetadataToText: Using top-level object as 'effectiveComment'.");
+            }
+
+            // Now, check if we have *any* data to proceed.
+            // We need *either* parameters in effectiveComment (like 'steps' or 'uc') OR a top-level Description.
+            if (Object.keys(effectiveComment).length === 0 && jsonData.Description === undefined) {
+                 return { txt: `格式化警告：输入 JSON 结构不完整 (缺少 'Comment' 对象或 'Description')。无法生成 NAI 格式文本。\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`, details: {} };
+            }
+            // --- MODIFICATION END ---
+
+            try {
+                let usedDescriptionFallback = false;
+                let prompt = effectiveComment.prompt || ''; // Get prompt from params object
+                if (!prompt && jsonData.Description) { // Fallback to top-level Description
+                    prompt = jsonData.Description;
+                    usedDescriptionFallback = true;
+                    console.log("formatMetadataToText: Using jsonData.Description as fallback prompt.");
+                }
+                
+                // All other params *must* come from effectiveComment
+                const steps = effectiveComment.steps || 'N/A';
+                const uc = effectiveComment.uc || ''; // This gets ntags
+                const vt = effectiveComment.reference_strength_multiple;
+                const hasVibeTransfer = Array.isArray(vt) && vt.length > 0;
+                const directorRef = effectiveComment.director_reference_strengths;
+                const hasCharRef = Array.isArray(directorRef) && directorRef.length > 0;
+                const request_type = effectiveComment.request_type; 
+                let sampler = effectiveComment.sampler || 'k_euler'; 
+                const seed = effectiveComment.seed || 'N/A'; 
+                const height = effectiveComment.height || 'N/A'; 
+                const width = effectiveComment.width || 'N/A'; 
+                const scale = effectiveComment.scale; 
+                let cfg_rescale = effectiveComment.cfg_rescale; 
+                const ns = effectiveComment.noise_schedule; 
+                const dynamic_thresholding = effectiveComment.dynamic_thresholding; 
+                const skip_cfg_above_sigma = effectiveComment.skip_cfg_above_sigma; 
+                const prefer_brownian = effectiveComment.prefer_brownian; 
+                const source = jsonData.Source || (effectiveComment.Source || 'N/A'); 
+                let charCaptionsTxt = ''; 
+                const v4Prompt = effectiveComment.v4_prompt; 
+                const v4NegativePrompt = effectiveComment.v4_negative_prompt; 
+                // --- (Rest of the function is standard logic) ---
+                let charCaptionsN = []; if (v4NegativePrompt && v4NegativePrompt.caption && Array.isArray(v4NegativePrompt.caption.char_captions)) charCaptionsN = v4NegativePrompt.caption.char_captions; if (v4Prompt && v4Prompt.caption && Array.isArray(v4Prompt.caption.char_captions)) { const charCaptions = v4Prompt.caption.char_captions; const useCoords = v4Prompt.use_coords ?? true; charCaptionsTxt = listsToStringStrictPairingV3(charCaptions, charCaptionsN, '', useCoords); charCaptionsTxt = charCaptionsTxt.replace(/(?<!u)c=/g, '\nc='); } const samplerMap = { 'k_euler': 'Euler', 'k_euler_ancestral': 'Euler a', 'k_dpmpp_2s_ancestral': 'DPM++ 2S a', 'k_dpmpp_2m': 'DPM++ 2M', 'k_dpmpp_sde': 'DPM++ SDE', 'k_dpmpp_2m_sde': 'DPM++ 2M SDE', 'ddim': 'DDIM' }; sampler = samplerMap[sampler] || 'Euler'; const sm = effectiveComment.sm; const sm_dyn = effectiveComment.sm_dyn; let naiType = ''; let allIf = ''; let allFIf = ''; 
+                
+                let naiVersion = 'NAI3'; // Default
+                if (source.includes('NovelAI Diffusion V4.5 B5A2A797') || source.includes('NovelAI Diffusion V4.5 B5A2A797')) { allFIf += ' nai4.5c'; naiVersion = 'NAI4.5 测试版'; } 
+                else if (source.includes('NovelAI Diffusion V4.5 B9F340FD') || source.includes('NovelAI Diffusion V4.5')) { allFIf += ' nai4.5'; naiVersion = 'NAI4.5'; } 
+                else if (source.includes('NovelAI Diffusion V4 F6E18726') || source.includes('NovelAI Diffusion V4 C1CCBA86')) { allFIf += ' nai4c'; naiVersion = 'NAI4 测试版'; } 
+                else if (source.includes('NovelAI Diffusion V4 4F49EC75') || source.includes('NovelAI Diffusion V4 79F47848') || source.includes('NovelAI Diffusion V4')) { allFIf += ' nai4'; naiVersion = 'NAI4'; }
+
+                if (usedDescriptionFallback) {
+                    naiVersion = 'NAI初代';
+                }
+
+                if (hasCharRef) naiType = '[角色参考(Character Reference)]';
+                if (hasVibeTransfer) naiType += '[氛围转移(Vibe Transfer)]';
+                if (request_type === 'Img2ImgRequest') naiType += '[以图画图(Image to Image)]'; else if (request_type === 'NativeInfillingRequest') naiType = '[局部重绘(Inpainting)]'; if (!naiType) naiType = '[文生图(Text to Image)]'; const scaleL = { "长图": {height: 1536, width: 512}, "长幅": {height: 1728, width: 576}, "宽图": {height: 832, width: 1216}, "横图": {height: 512, width: 1536}, "横幅": {height: 576, width: 1728}, "方图": {height: 1024, width: 1024} }; for (const name in scaleL) if (height === scaleL[name].height && width === scaleL[name].width) { allFIf += ` ${name}`; break; } if (sm && sm_dyn) { allFIf += ' SMEA'; allIf += ' | 已开启 SMEA+DYN'; } else if (sm && !sm_dyn) { allFIf += ' SMEAnoDYN'; allIf += ' | 已开启 SMEA'; } if (sampler !== 'Euler') allFIf += ` ${sampler}`; if (typeof scale === 'number' && scale !== 5) { allIf += ` | scale:${scale}`; allFIf += ` scale=${scale}`; } function isDivisibleBy002(number) { try { const scaled = number * 100; return Math.abs(scaled - Math.round(scaled)) < 1e-9 && Math.round(scaled) % 2 === 0; } catch { return false; }} if (cfg_rescale !== undefined && cfg_rescale !== null) { let numCfgRescale = Number(cfg_rescale); if (!isNaN(numCfgRescale) && numCfgRescale !== 0) { if (!isDivisibleBy002(numCfgRescale)) numCfgRescale = parseFloat((numCfgRescale + 0.01).toFixed(2)); allIf += ` | cfg_rescale:${numCfgRescale}`; allFIf += ` cfg_rescale=${numCfgRescale}`; } } if (ns && ns !== 'native') { allIf += ` | noise_schedule:${ns}`; allFIf += ` ns=${ns}`; if (!prefer_brownian) allFIf += ' prefer_brownian=false'; } if (dynamic_thresholding) allIf += ' ot=decrisp'; if (typeof skip_cfg_above_sigma === 'number' && skip_cfg_above_sigma > 0) allIf += ' ot=variety'; if (typeof steps === 'number' && steps !== 28) allIf += ` steps=${steps}`; allFIf = allFIf.trim(); let txt = ''; if (allFIf) txt = `/绘画 参数=${allFIf}\n\nprompt=${prompt}${charCaptionsTxt ? '\n' + charCaptionsTxt : ''}\nntags=${uc}\n\n生成类型${naiVersion}:${naiType} | 采样器:${sampler} | ${width}X${height}${allIf} | seed=${seed}`; else txt = `/绘画\n\nprompt=${prompt}${charCaptionsTxt ? '\n' + charCaptionsTxt : ''}\nntags=${uc}\n\n生成类型${naiVersion}:${naiType} | 采样器:${sampler} | ${width}X${height}${allIf} | seed=${seed}`; txt = txt.replace(/\n\n+/g, '\n\n').trim(); return { txt: txt, details: {} };
+            } catch (error) { console.error("Error formatting metadata to text:", error); return { txt: `格式化 NAI 文本时出错: ${error.message}\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`, details: {} }; }
+        }
+
+        // --- PNG Chunk Reading Logic (NO CHANGES) ---
+        function findPngChunks(arrayBuffer) { /* ... (PNG chunk reading logic - unchanged) ... */ const chunks = { parameters: null, otherText: {}, error: null }; const dataView = new DataView(arrayBuffer); let offset = 8; try { while (offset < dataView.byteLength) { if (offset + 8 > dataView.byteLength) break; const length = dataView.getUint32(offset, false); const typeCode = dataView.getUint32(offset + 4, false); const type = String.fromCharCode((typeCode >> 24) & 0xFF, (typeCode >> 16) & 0xFF, (typeCode >> 8) & 0xFF, typeCode & 0xFF); const chunkDataStart = offset + 8; const chunkDataEnd = chunkDataStart + length; if (chunkDataEnd + 4 > dataView.byteLength) { chunks.error = `损坏的 PNG 数据 (块: ${type})。`; break; } if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') { const MAX_CHUNK_LEN = 50 * 1024 * 1024; if (length > MAX_CHUNK_LEN) { chunks.error = `PNG 块 ${type} 过大。`; break; } const chunkData = new Uint8Array(arrayBuffer, chunkDataStart, length); let keyword = ''; let text = ''; let keywordEnd = -1; for (let i = 0; i < chunkData.length; i++) { if (chunkData[i] === 0) { keywordEnd = i; break; } } if (keywordEnd !== -1) { keyword = new TextDecoder('latin1').decode(chunkData.slice(0, keywordEnd)); let rawTextBytes = chunkData.slice(keywordEnd + 1); try { if (type === 'zTXt') { if (rawTextBytes.length > 1 && rawTextBytes[0] === 0) { const decompressed = pako.inflate(rawTextBytes.slice(1)); text = new TextDecoder('utf-8').decode(decompressed); } else if (rawTextBytes.length <= 1) { text = ""; } else { text = '[不支持的 zTXt 压缩方法或格式错误]'; } } else if (type === 'iTXt') { let currentPos = 0; if (rawTextBytes.length < 2) { text = '[iTXt 数据过短]'; } else { const compressionFlag = rawTextBytes[currentPos++]; const compressionMethod = rawTextBytes[currentPos++]; let langTagEnd = -1, transKeywordEnd = -1; let nullCount = 0; for(let i = currentPos; i < rawTextBytes.length; i++) { if (rawTextBytes[i] === 0) { nullCount++; if (nullCount === 1) langTagEnd = i; else if (nullCount === 2) transKeywordEnd = i; else break; } } if (transKeywordEnd !== -1) { let textBytes = rawTextBytes.slice(transKeywordEnd + 1); if (compressionFlag === 1 && compressionMethod === 0) { if (textBytes.length > 0) { textBytes = pako.inflate(textBytes); } else { textBytes = new Uint8Array(); } } text = new TextDecoder('utf-8').decode(textBytes); } else { text = '[iTXt 解析错误 - 缺少分隔符]'; } } } else { text = new TextDecoder('latin1').decode(rawTextBytes); } if (keyword.toLowerCase() === 'parameters') { chunks.parameters = text; } else { chunks.otherText[keyword] = text; } } catch (e) { text = `[处理 ${type} 块时出错: ${e.message}]`; chunks.otherText[keyword] = text; } } else { console.warn(`PNG text chunk type ${type} has no null separator for keyword.`); } } else if (type === 'IEND') { break; } offset = chunkDataEnd + 4; } } catch (e) { console.error("解析 PNG 块时出错:", e); if (!chunks.error) { chunks.error = "解析 PNG 块时失败。"; } } return chunks; }
+
+        // --- Utility Functions ---
+        function updateLoadingIndicator() { if (processingCounter > 0) { globalLoadingIndicator.classList.remove('hidden'); } else { globalLoadingIndicator.classList.add('hidden'); } }
+
+        // --- Modified copyToClipboard with Fallback ---
+        function copyToClipboard(buttonElement, textToCopy) {
+            if (textToCopy === null || textToCopy === undefined) {
+                textToCopy = '';
+            }
+            const textString = String(textToCopy);
+            const feedback = buttonElement.nextElementSibling; // Should be the span.copy-feedback
+
+            const showFeedback = (message, color) => {
+                if (feedback && feedback.classList.contains('copy-feedback')) {
+                    feedback.textContent = message;
+                    feedback.style.color = color;
+                    setTimeout(() => {
+                        feedback.textContent = '';
+                        feedback.style.color = ''; // Reset color
+                    }, color === '#ef4444' ? 3000 : 2000); // Show error longer
+                } else {
+                    // Fallback if span not found
+                    console.warn("Copy feedback span not found. Button text used as fallback.");
+                    const originalText = buttonElement.dataset.originalText || buttonElement.textContent;
+                    buttonElement.textContent = message.includes('失败') ? '复制失败!' : '已复制!';
+                    setTimeout(() => { buttonElement.textContent = originalText; }, 1500);
+                }
+            };
+
+            // Store original button text if not already stored
+            if (!buttonElement.dataset.originalText) {
+                buttonElement.dataset.originalText = buttonElement.textContent;
+            }
+
+            // --- Attempt 1: Modern Clipboard API ---
+            if (navigator.clipboard && window.isSecureContext) { // Check for secure context
+                navigator.clipboard.writeText(textString).then(() => {
+                    console.log("Copied using navigator.clipboard");
+                    showFeedback('已复制!', '#10b981'); // Green
+                }).catch(err => {
+                    console.warn('navigator.clipboard.writeText failed:', err, 'Attempting fallback...');
+                    // --- Attempt 2: Fallback using document.execCommand ---
+                    fallbackCopyTextToClipboard(textString, showFeedback);
+                });
+            } else {
+                console.warn('navigator.clipboard not available or insecure context. Attempting fallback...');
+                // --- Attempt 2: Fallback using document.execCommand ---
+                fallbackCopyTextToClipboard(textString, showFeedback);
+            }
+        }
+
+        function fallbackCopyTextToClipboard(text, showFeedbackCallback) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+
+            // Maketextarea non-editable and invisible
+            textArea.style.position = 'fixed';
+            textArea.style.top = '-9999px';
+            textArea.style.left = '-9999px';
+             textArea.style.width = '2em'; // Avoid potential rendering issues
+             textArea.style.height = '2em';
+             textArea.style.padding = '0';
+             textArea.style.border = 'none';
+             textArea.style.outline = 'none';
+             textArea.style.boxShadow = 'none';
+             textArea.style.background = 'transparent';
+             textArea.setAttribute('readonly', ''); // Make it read-only
+
+            document.body.appendChild(textArea);
+            textArea.focus(); // Required for some browsers
+            textArea.select(); // Select the text
+
+            let success = false;
+            try {
+                success = document.execCommand('copy');
+                if (success) {
+                    console.log("Copied using document.execCommand");
+                    showFeedbackCallback('已复制!', '#10b981'); // Green
+                } else {
+                    console.error('document.execCommand("copy") failed.');
+                    showFeedbackCallback('复制失败!', '#ef4444'); // Red
+                }
+            } catch (err) {
+                console.error('Error during document.execCommand("copy"):', err);
+                 showFeedbackCallback('复制失败!', '#ef4444'); // Red
+            }
+
+            document.body.removeChild(textArea);
+        }
+        // --- End of Modified copyToClipboard ---
+
+        function generateUniqueId(prefix = 'data') { return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`; }
+        function showClearButtonIfNeeded() { if (resultsContainer.children.length > 0) { clearBtn.style.display = 'block'; } else { clearBtn.style.display = 'none'; } }
+        function clearResults() { resultsContainer.innerHTML = ''; cleanupPreviews(); showClearButtonIfNeeded(); }
+        function cleanupPreviews() { activePreviews.forEach(url => URL.revokeObjectURL(url)); activePreviews.clear(); console.log("清理了图片预览 Object URLs。"); }
+        function highlightJson(jsonString) { /* ... (highlighting code) ... */ if (!jsonString) return ''; jsonString = jsonString.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); return jsonString.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) { let cls = 'json-number'; if (/^"/.test(match)) { if (/:$/.test(match)) { cls = 'json-key'; } else { cls = 'json-string'; } } else if (/true|false/.test(match)) { cls = 'json-boolean'; } else if (/null/.test(match)) { cls = 'json-null'; } return '<span class="' + cls + '">' + match + '</span>'; }); }
+        function formatJsonForDisplay(data) { /* ... (JSON formatting code) ... */ if (data === null || data === undefined) return ''; try { const replacer = (key, value) => { if (value && typeof value === 'object' && value.description !== undefined) { return value.description; } if (typeof value === 'bigint') { return value.toString() + 'n'; } if (key === 'MakerNote' && typeof value?.description === 'string' && value.description.includes('bytes)')) return "[MakerNote data omitted]"; if (key === 'UserComment' && typeof value?.description === 'string' && value.description.includes('bytes)')) return "[UserComment data omitted]"; return value; }; return JSON.stringify(data, replacer, 2); } catch (e) { console.error("Error formatting JSON for display:", e); return String(data); } }
+
+        // --- Function to toggle JSON view ---
+        function toggleJsonView(button) {
+            const preId = button.dataset.target;
+            const preElement = document.getElementById(preId);
+            if (!preElement) return;
+
+            preElement.classList.toggle('expanded');
+            const isExpanded = preElement.classList.contains('expanded');
+            button.textContent = isExpanded ? '折叠' : '显示全部';
+        }
+
+        // --- Main Processing Function (HTML generation uses hidden textareas for copy source) ---
+        async function processFile(file) {
+            // ... (Initial checks and setup - unchanged) ...
+            const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+            if (!file || !allowedTypes.includes(file.type)) { displayError(`不支持的文件类型 "${file?.type || '未知'}"。请选择 PNG, JPG/JPEG, 或 WEBP 文件。`, file?.name || 'Pasted Item'); return; }
+            const MAX_FILE_SIZE = 500 * 1024 * 1024;
+             if (file.size > MAX_FILE_SIZE) { displayError(`文件过大 (${window.prettyBytes(file.size)})。最大允许 ${window.prettyBytes(MAX_FILE_SIZE)}。`, file.name); return; }
+
+            processingCounter++;
+            updateLoadingIndicator();
+
+            const fileId = generateUniqueId('file');
+            const resultBlock = document.createElement('div');
+            resultBlock.id = fileId;
+            resultBlock.className = 'result-block';
+            resultBlock.innerHTML = `
+                <div class="result-header">
+                    <span class="result-filename" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                    <span class="result-fileinfo">${escapeHtml(file.type)}, ${escapeHtml(window.prettyBytes(file.size))}</span>
+                </div>
+                <div class="processing-indicator pl-1"><div class="spinner"></div>处理中...</div>
+                <div class="result-content mt-2"></div>`;
+
+            resultsContainer.insertBefore(resultBlock, resultsContainer.firstChild);
+            showClearButtonIfNeeded();
+
+            const resultBlockContent = resultBlock.querySelector('.result-content');
+            const processingIndicator = resultBlock.querySelector('.processing-indicator');
+            let arrayBuffer;
+            let objectURL = null;
+
+
+            try {
+                 arrayBuffer = await file.arrayBuffer();
+                 console.log(`文件 ${file.name} 已读取为 ArrayBuffer (${arrayBuffer.byteLength} bytes)`);
+
+                 if (file.type.startsWith('image/') && file.size < 20 * 1024 * 1024) {
+                     try {
+                         objectURL = URL.createObjectURL(file);
+                         activePreviews.add(objectURL);
+                         const imgPreview = document.createElement('img');
+                         imgPreview.src = objectURL;
+                         imgPreview.alt = "图片预览";
+                         imgPreview.className = 'image-preview';
+                         // Insert preview *before* the content div
+                         resultBlock.insertBefore(imgPreview, resultBlockContent);
+                     } catch (e) { console.error("创建对象 URL 预览时出错:", e); }
+                 }
+
+                 let lsbSuccess = false; let lsbData = null; let lsbError = null;
+
+                 // --- Check PNG or WEBP for LSB ---
+                 if (file.type === 'image/png' || file.type === 'image/webp') {
+                     const img = new Image();
+                     const loadImagePromise = new Promise((resolve, reject) => {
+                         const blob = new Blob([arrayBuffer], {type: file.type});
+                         const blobUrl = URL.createObjectURL(blob);
+                         const cleanupBlobUrl = () => { try { URL.revokeObjectURL(blobUrl); console.log("Revoked blob URL for LSB check:", blobUrl); } catch(e) { console.warn("Error revoking blob URL:", e); } };
+                         img.onload = () => { cleanupBlobUrl(); try { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; ctx.drawImage(img, 0, 0); const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height); lsbData = extractMetadataFromImageData(imageData); lsbSuccess = true; resolve(); } catch (err) { lsbError = err; resolve(); /* Resolve even on error to proceed */ } finally { try { ctx.clearRect(0, 0, canvas.width, canvas.height); } catch(e) {} } };
+                         img.onerror = (err) => { cleanupBlobUrl(); const loadError = new Error(`无法加载图片 "${file.name}" 以进行 LSB 检查。`); console.error("Image load error for LSB:", err); reject(loadError); };
+                         img.src = blobUrl;
+                     });
+                     try { await loadImagePromise; } catch (loadErr) { lsbError = loadErr; console.error(loadErr.message); }
+                 } else {
+                     lsbError = new Error("非 PNG/WEBP 文件，跳过 LSB 检查。");
+                 }
+
+                 processingIndicator.style.display = 'none';
+
+                 if (lsbSuccess && lsbData) {
+                     // --- LSB Success HTML Generation ---
+                     const { txt: formattedText } = formatMetadataToText(lsbData.jsonData);
+                     const jsonString = JSON.stringify(lsbData.jsonData, null, 2);
+                     const yamlString = lsbData.yamlData || '';
+                     const highlightedJsonHtml = highlightJson(jsonString);
+
+                     const textId = generateUniqueId('lsb-text');
+                     const jsonId = generateUniqueId('lsb-json');
+                     const yamlId = generateUniqueId('lsb-yaml');
+
+                     const rawFormattedText = formattedText || '';
+                     const rawJsonString = jsonString || '';
+                     const rawYamlString = yamlString || '';
+
+                     // Check if the JSON is long enough to be collapsed
+                     const lineCount = (rawJsonString.match(/\n/g) || []).length + 1;
+                     const isCollapsible = lineCount > 4;
+
+                     let jsonDisplayHtml;
+                     if (isCollapsible) {
+                         jsonDisplayHtml = `
+                             <div>
+                                 <pre id="${jsonId}" class="collapsible-pre">${highlightedJsonHtml || '[无 JSON 数据]'}</pre>
+                                 <div class="toggle-view-button" data-target="${jsonId}" onclick="toggleJsonView(this)">显示全部</div>
+                             </div>`;
+                     } else {
+                         jsonDisplayHtml = `<pre id="${jsonId}">${highlightedJsonHtml || '[无 JSON 数据]'}</pre>`;
+                     }
+
+
+                     resultBlockContent.innerHTML = `
+                         <div class="mb-3">
+                             <h3 class="text-md font-semibold mb-1 text-gray-700 inline-block">AI绘画机器人指令:</h3>
+                             <button onclick="copyToClipboard(this, document.getElementById('${textId}-raw').value)" class="copy-button float-right">复制文本</button>
+                             <span class="copy-feedback float-right mr-2"></span>
+                             <textarea id="${textId}-raw" class="copy-textarea" readonly>${escapeHtml(rawFormattedText)}</textarea>
+                             <pre id="${textId}">${escapeHtml(rawFormattedText) || '[无格式化文本]'}</pre>
+                         </div>
+                         <div class="mb-3">
+                              <h3 class="text-md font-semibold mb-1 text-gray-700 inline-block">原始 LSB JSON 数据:</h3>
+                              <button onclick="copyToClipboard(this, document.getElementById('${jsonId}-raw').value)" class="copy-button float-right">复制 JSON</button>
+                              <span class="copy-feedback float-right mr-2"></span>
+                              <textarea id="${jsonId}-raw" class="copy-textarea" readonly>${escapeHtml(rawJsonString)}</textarea>
+                              ${jsonDisplayHtml}
+                         </div>
+						 <!-- 
+                         ${rawYamlString ? `
+                         <div class="mb-3">
+                             <h3 class="text-md font-semibold mb-1 text-gray-700 inline-block">LSB YAML 数据:</h3>
+                             <button onclick="copyToClipboard(this, document.getElementById('${yamlId}-raw').value)" class="copy-button float-right">复制 YAML</button>
+                             <span class="copy-feedback float-right mr-2"></span>
+                             <textarea id="${yamlId}-raw" class="copy-textarea" readonly>${escapeHtml(rawYamlString)}</textarea>
+                             <pre id="${yamlId}">${escapeHtml(rawYamlString)}</pre>
+                         </div>` : ''}
+						  -->
+                     `;
+                 } else {
+                     // --- LSB Failure / Fallback HTML Generation (Uses hidden textareas for copy source) ---
+                     let sdParams = null; let sdPngText = {}; let sdExif = null;
+                     let fallbackError = null; let pngChunkError = null;
+
+                     if (typeof ExifReader === 'undefined') {
+                         fallbackError = "EXIF 读取库加载失败。";
+                         console.error("ExifReader library is not loaded!");
+                     } else {
+                         if (file.type === 'image/png') {
+                             try { const pngChunks = findPngChunks(arrayBuffer); if(pngChunks.error) { pngChunkError = pngChunks.error; } if (pngChunks.parameters) { sdParams = pngChunks.parameters; } if (pngChunks.otherText && Object.keys(pngChunks.otherText).length > 0) { sdPngText = pngChunks.otherText; } } catch (e) { fallbackError = (fallbackError ? fallbackError + '; ' : '') + `解析 PNG 块时出错: ${e.message}`; }
+                         }
+                         try {
+                              const stopAfterSos = file.type === 'image/jpeg' || file.type === 'image/webp';
+                              console.log(`Loading EXIF for ${file.name} (stopAfterSos: ${stopAfterSos})`);
+                              const exifTags = await ExifReader.load(arrayBuffer, { includeUnknown: true, stopAfterSos: stopAfterSos });
+                              console.log(`EXIF tags loaded for ${file.name}:`, Object.keys(exifTags).length > 0 ? exifTags : 'No tags found');
+                              // Extract parameters from UserComment if not found elsewhere
+                              if (!sdParams && exifTags.UserComment?.description) { const comment = exifTags.UserComment.description; const isLikelyParams = comment.includes('\n') && (comment.match(/Steps: \d+/) || comment.match(/Negative prompt:/) || comment.match(/Sampler: \w+/) || comment.match(/CFG scale: [\d\.]+/)); if (isLikelyParams) { sdParams = comment; console.log("Found SD params in EXIF UserComment."); } }
+                              
+                              if (!sdParams && exifTags.Description?.description) {
+                                  const desc = exifTags.Description.description;
+                                  const isLikelyParams = desc.includes('\n') && (desc.match(/Steps: \d+/) || desc.match(/Negative prompt:/) || desc.match(/Sampler: \w+/) || desc.match(/CFG scale: [\d\.]+/));
+                                  if (isLikelyParams) {
+                                      sdParams = desc;
+                                      console.log("Found SD params in EXIF Description.");
+                                  }
+                              }
+
+                              // Clean up large/unhelpful tags before storing
+                              if (exifTags.MakerNote?.description?.includes('bytes)')) delete exifTags.MakerNote;
+                              if (!sdParams && exifTags.UserComment?.description?.includes('bytes)')) delete exifTags.UserComment; // Delete only if not used for sdParams
+                              if (Object.keys(exifTags).length > 0) { sdExif = exifTags; }
+                         } catch (e) {
+                             if (!e.message.toLowerCase().includes('no exif data')) {
+                                 fallbackError = (fallbackError ? fallbackError + '; ' : '') + `读取 EXIF 出错: ${e.message}`;
+                                 console.error(`Error reading EXIF for ${file.name}:`, e);
+                             } else {
+                                 console.log(`No EXIF data found in ${file.name}.`);
+                             }
+                         }
+                     }
+
+                     // --- Build Fallback HTML ---
+                     let fallbackContentHtml = ''; let attemptedNaiFormatHtml = ''; let dataFound = false;
+                     // --- MODIFICATION START (Handle Request 2 & 3 Logic) ---
+                     let naiFormattedFromPng = false; // Flag for successful PNG format
+                     let naiFormattedFromExif = false; // Flag for successful EXIF format
+
+                     // 1. NAI Format Attempt (from PNG Text 'Comment')
+                     if (sdPngText && sdPngText.Comment) {
+                          const value = sdPngText.Comment;
+                          if (typeof value === 'string' && value.trim().startsWith('{') && value.trim().endsWith('}')) { 
+                             try { 
+                                 const parsedJson = JSON.parse(value); 
+                                 if (!parsedJson.Source) { parsedJson.Source = `From PNG Text Chunk: Comment`; } 
+                                 
+                                 // Inject EXIF Description if PNG prompt is missing
+                                 if ((!parsedJson.Comment || !parsedJson.Comment.prompt) && sdExif?.Description?.description) {
+                                     // Don't assign prompt here, let formatMetadataToText handle the fallback
+                                     parsedJson.Description = sdExif.Description.description; 
+                                     console.log("Injected EXIF Description into PNG Comment JSON for formatting.");
+                                 }
+
+                                 const { txt: naiFormattedText } = formatMetadataToText(parsedJson); 
+                                 const rawNaiFormattedText = naiFormattedText || ''; 
+                                 if (rawNaiFormattedText && !rawNaiFormattedText.includes("格式化警告")) { 
+                                     const naiAttemptId = generateUniqueId('nai-attempt-png');
+                                     attemptedNaiFormatHtml += `
+                                         <div class="metadata-block">
+                                             <h4 class="nai-format-attempt-title">AI绘画机器人指令 (来自 PNG Text):</h4>
+                                             <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
+                                             <span class="copy-feedback float-right mr-2"></span>
+                                             <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
+                                             <pre id="${naiAttemptId}">${escapeHtml(rawNaiFormattedText)}</pre>
+                                         </div>`;
+                                     dataFound = true; 
+                                     naiFormattedFromPng = true; // Mark success
+                                 } 
+                             } catch (parseError) {
+                                 console.warn("Failed to parse PNG Comment chunk as JSON:", parseError);
+                             } 
+                          }
+                     }
+
+                     // 2. NAI Format Attempt (from EXIF as fallback)
+                     // Only run this if PNG formatting failed AND we have EXIF
+                     if (!naiFormattedFromPng && sdExif) {
+                         console.log("PNG Comment formatting failed or absent, attempting to format from EXIF.");
+                         
+                         let parsedExifComment = {}; // Default to empty object
+                         if (sdExif.UserComment?.description && sdExif.UserComment.description.startsWith('{')) {
+                             try {
+                                 parsedExifComment = JSON.parse(sdExif.UserComment.description);
+                                 console.log("Successfully parsed EXIF UserComment JSON.");
+                             } catch (e) {
+                                 console.warn("EXIF UserComment looked like JSON but failed to parse:", e);
+                                 // If it fails parsing, we can't get steps, uc etc.
+                             }
+                         }
+
+                         // We can *only* proceed if we have a Description (as prompt)
+                         if (sdExif.Description?.description) {
+                             const fakeJson = {
+                                 Description: sdExif.Description.description, // This will be used as prompt
+                                 Comment: parsedExifComment, // This contains steps, uc, seed, etc.
+                                 Source: "From EXIF (Fallback)"
+                             };
+                             
+                             // Ensure formatMetadataToText uses Description for the prompt
+                             if (fakeJson.Comment.prompt) {
+                                 delete fakeJson.Comment.prompt;
+                             }
+
+                             const { txt: naiFormattedText } = formatMetadataToText(fakeJson);
+                             const rawNaiFormattedText = naiFormattedText || ''; 
+                             if (rawNaiFormattedText && !rawNaiFormattedText.includes("格式化警告")) { 
+                                 const naiAttemptId = generateUniqueId('nai-attempt-exif');
+                                 attemptedNaiFormatHtml += `
+                                     <div class="metadata-block">
+                                         <h4 class="nai-format-attempt-title">AI绘画机器人指令 (来自 EXIF):</h4>
+                                         <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
+                                         <span class="copy-feedback float-right mr-2"></span>
+                                         <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
+                                         <pre id="${naiAttemptId}">${escapeHtml(rawNaiFormattedText)}</pre>
+                                     </div>`; 
+                                 dataFound = true;
+                                 naiFormattedFromExif = true; // Mark success
+                             }
+                         }
+                     }
+                     // --- MODIFICATION END ---
+
+
+                     // 3. Regular Fallback Blocks
+                     if (sdParams) { /* ... (SD Params block - unchanged structure, uses hidden textarea) ... */ dataFound = true; const id = generateUniqueId('params'); const rawSdParams = sdParams || ''; fallbackContentHtml += ` <div class="metadata-block"> <h4 class="metadata-title">SD 参数 (parameters)</h4> <button onclick="copyToClipboard(this, document.getElementById('${id}-raw').value)" class="copy-button float-right">复制</button> <span class="copy-feedback float-right mr-2"></span> <textarea id="${id}-raw" class="copy-textarea" readonly>${escapeHtml(rawSdParams)}</textarea> <pre id="${id}">${escapeHtml(rawSdParams)}</pre> </div>`; }
+                     if (sdExif && Object.keys(sdExif).length > 0) { /* ... (EXIF block - unchanged structure, uses hidden textarea) ... */ dataFound = true; const id = generateUniqueId('exif'); const formattedExifString = formatJsonForDisplay(sdExif); const highlightedExifHtml = highlightJson(formattedExifString); const rawExifJson = JSON.stringify(sdExif, null, 2); fallbackContentHtml += ` <div class="metadata-block"> <h4 class="metadata-title">EXIF(未必是咒语)</h4> <button onclick="copyToClipboard(this, document.getElementById('${id}-raw').value)" class="copy-button float-right">复制 JSON</button> <span class="copy-feedback float-right mr-2"></span> <textarea id="${id}-raw" class="copy-textarea" readonly>${escapeHtml(rawExifJson)}</textarea> <pre id="${id}">${highlightedExifHtml}</pre> </div>`; }
+                     
+                     // --- MODIFICATION START (Fix 2) ---
+                     if (sdPngText && Object.keys(sdPngText).length > 0) {
+                         const pngTextId = generateUniqueId('pngtext'); 
+                         let chunksPreContent = ''; 
+                         let contentAdded = false; 
+                         for (const key in sdPngText) {
+                             // --- REMOVED FILTERING LOGIC ---
+                             // Always show all PNG text chunks
+                             // --- END REMOVAL ---
+
+                             const value = sdPngText[key]; 
+                             let valueDisplay = ''; 
+                             let isJson = false;
+                             if (typeof value === 'string' && value.trim().startsWith('{') && value.trim().endsWith('}')) { 
+                                 try { 
+                                     const parsedJson = JSON.parse(value);
+                                     valueDisplay = `<pre>${highlightJson(JSON.stringify(parsedJson, null, 2))}</pre>`;
+                                     isJson = true;
+                                 } catch (e) {
+                                     // Not valid JSON, treat as string
+                                     valueDisplay = escapeHtml(value);
+                                 } 
+                             } else {
+                                 valueDisplay = escapeHtml(value);
+                             }
+                             
+                             chunksPreContent += `<strong>${escapeHtml(key)}:</strong>\n<div class="chunk-value">${valueDisplay}</div>`; 
+                             contentAdded = true; 
+                         } 
+                         if (contentAdded) { 
+                             dataFound = true; 
+                             fallbackContentHtml += `<div class="metadata-block"><h4 class="metadata-title">其他 PNG 文本块 (Text Chunks)</h4><pre id="${pngTextId}" class="other-text-chunks-pre">${chunksPreContent}</pre></div>`; 
+                         } 
+                     }
+                     // --- MODIFICATION END ---
+
+
+                     // 4. Combine and Display Messages + Blocks
+                     let messageHtml = '';
+                     // Update LSB error messages
+                     if (lsbError && !lsbError.message.toLowerCase().includes('magic number 不匹配') && !lsbError.message.toLowerCase().includes('非 png/webp')) {
+                         messageHtml += `<div class="error-message">LSB 提取失败: ${escapeHtml(lsbError.message)}</div>`;
+                     } else if (lsbError) { // Show info for expected non-LSB cases
+                         const lsbErrorMsg = lsbError.message.toLowerCase();
+                         const lsbSkipReason = lsbErrorMsg.includes('非 png/webp') ? '非PNG/WEBP文件' : 'Magic Number不匹配';
+                         messageHtml += `<div class="info-message">未找到 LSB 隐写元数据 (${lsbSkipReason})。正在检查标准元数据...</div>`;
+                     }
+                     if (pngChunkError) { messageHtml += `<div class="error-message">PNG 块解析警告: ${escapeHtml(pngChunkError)}</div>`; }
+                     if (fallbackError) { messageHtml += `<div class="error-message">回退处理错误: ${escapeHtml(fallbackError)}</div>`; }
+                     // Update "not found" check
+                     if (!dataFound && !fallbackError && !pngChunkError && !(lsbError && !lsbError.message.toLowerCase().includes('magic number 不匹配') && !lsbError.message.toLowerCase().includes('非 png/webp'))) {
+                        messageHtml += `<div class="info-message">在此文件中未找到可识别的 LSB 或标准元数据。</div>`;
+                     }
+
+                     resultBlockContent.innerHTML = messageHtml + attemptedNaiFormatHtml + fallbackContentHtml;
+                 }
+
+            } catch (error) {
+                console.error(`处理 ${file.name} 时发生严重错误:`, error);
+                processingIndicator.style.display = 'none';
+                resultBlockContent.innerHTML = `<div class="error-message"><strong class="font-bold">处理失败:</strong><span class="block sm:inline ml-1">${escapeHtml(error.message || "发生未知错误")}</span></div>`;
+            } finally {
+                processingCounter--; updateLoadingIndicator(); showClearButtonIfNeeded();
+                 // Don't revoke objectURL here if it's used for preview; cleanup happens globally or on new file load
+            }
+        }
+
+        // --- Display Global Error Function ---
+        function displayError(message, filename = "未知文件", blockId = null) { /* ... (Error display logic - unchanged) ... */ const errorHtml = `<div class="error-message"><strong class="font-bold">错误:</strong><span class="block sm:inline ml-1">${escapeHtml(message)}</span></div>`; if (blockId) { let targetBlock = document.getElementById(blockId); if (targetBlock) { const content = targetBlock.querySelector('.result-content'); const indicator = targetBlock.querySelector('.processing-indicator'); if (indicator) indicator.style.display = 'none'; if (content) content.innerHTML = errorHtml; else targetBlock.innerHTML += errorHtml; } else { const errorDiv = document.createElement('div'); errorDiv.className = 'result-block'; errorDiv.innerHTML = `<div class="result-header"><span class="result-filename">${escapeHtml(filename)}</span></div>${errorHtml}`; resultsContainer.insertBefore(errorDiv, resultsContainer.firstChild); } } else { const errorDiv = document.createElement('div'); errorDiv.className = 'result-block'; errorDiv.innerHTML = `<div class="result-header"><span class="result-filename">${escapeHtml(filename)}</span></div>${errorHtml}`; resultsContainer.insertBefore(errorDiv, resultsContainer.firstChild); } if (processingCounter > 0) processingCounter--; updateLoadingIndicator(); showClearButtonIfNeeded(); }
+
+        // --- Event Listeners (Added name check for pasted files) ---
+        fileInput.addEventListener('change', (event) => { const files = event.target.files; if (files.length > 0) { cleanupPreviews(); // Clean up old previews before processing new files
+             for (const file of files) { processFile(file); } } fileInput.value = ''; }); // Reset input
+        dropZone.addEventListener('dragover', (event) => { event.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (event) => { event.preventDefault(); dropZone.classList.remove('dragover'); const files = event.dataTransfer.files; if (files.length > 0) { cleanupPreviews(); for (const file of files) { processFile(file); } } });
+        document.addEventListener('paste', (event) => { console.log("Paste event detected."); const items = event.clipboardData?.items; if (!items) return; let foundImage = false; cleanupPreviews(); // Clean up old previews before processing pasted image
+             for (const item of items) { if (item.kind === 'file' && ['image/png', 'image/jpeg', 'image/webp'].includes(item.type)) { const file = item.getAsFile(); if (file) { // Create a useful name if the pasted file doesn't have one
+                 const defaultName = `Pasted_${Date.now()}.${file.type.split('/')[1] || 'png'}`; const pseudoName = file.name && file.name !== 'image.png' ? file.name : defaultName; const namedFile = new File([file], pseudoName, { type: file.type }); console.log(`Pasted image found: ${namedFile.name}, Type: ${namedFile.type}, Size: ${namedFile.size}`); processFile(namedFile); foundImage = true; break; // Process only the first valid image found
+                 } } else if (item.kind === 'file' && item.type.startsWith('image/')) { console.warn("Pasted an unsupported image type:", item.type); displayError(`粘贴的图片格式 (${item.type}) 不支持。请使用 PNG, JPG, 或 WEBP。`, 'Pasted Image'); foundImage = true; break; // Stop after finding an unsupported image
+                 } } if (foundImage) { event.preventDefault(); } else { console.log("No suitable image found in pasted items."); } });
+        window.addEventListener('beforeunload', cleanupPreviews); // Clean up previews when leaving the page
+
+    </script>
+</body>
+</html>
+
