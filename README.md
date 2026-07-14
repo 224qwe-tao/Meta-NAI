@@ -1,4 +1,4 @@
-# 圖片元數據提取器 V20251025
+# 圖片元數據提取器
 
 這是可直接放到 GitHub Pages 的靜態網站版本，介面與 `html.txt` 及參考圖片一致。
 
@@ -10,6 +10,7 @@
 - 支援 PNG、JPG/JPEG、WEBP
 - 優先讀取 NovelAI `stealth_pngcomp` LSB 元數據
 - 顯示 AI 繪圖機器人指令
+- 使用不同顏色方塊分開顯示 `c`、`uc` 和 `ntags`
 - 顯示及複製原始 JSON
 - 最新結果顯示在上方
 - 清空所有結果

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>圖片元數據提取器(V20251025)</title>
+    <title>图片元数据提取器</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
@@ -54,6 +54,78 @@
         .nai-format-attempt-title { font-size: 1rem; font-weight: bold; margin-bottom: 0.5rem; color: #dd6b20; display: inline-block; }
         .copy-button { display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.75rem; margin-left: 0.5rem; cursor: pointer; background-color: #e0e0e0; border: 1px solid #ccc; border-radius: 4px; transition: background-color 0.2s; vertical-align: middle; }
         .copy-button:hover { background-color: #d0d0d0; }
+
+        /* Structured NAI command display: separate c, uc and ntags into colored cards. */
+        .nai-command-view {
+            clear: both;
+            margin-top: 0.5rem;
+            padding: 0.75rem;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+            background-color: #f8f9fa;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.8rem;
+            line-height: 1.55;
+            overflow-wrap: anywhere;
+        }
+        @media (min-width: 768px) {
+            .nai-command-view {
+                padding: 1rem;
+                font-size: 0.875rem;
+            }
+        }
+        .nai-command-plain {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .nai-command-spacer { height: 0.7rem; }
+        .nai-command-card {
+            margin: 0.55rem 0;
+            padding: 0.7rem 0.8rem;
+            border: 1px solid;
+            border-left-width: 5px;
+            border-radius: 0.45rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .nai-command-card-label {
+            display: inline-block;
+            margin-right: 0.55rem;
+            padding: 0.08rem 0.42rem;
+            border-radius: 999px;
+            font-family: sans-serif;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            vertical-align: 0.08rem;
+        }
+        .nai-command-card-c {
+            background: #eff6ff;
+            border-color: #93c5fd;
+            color: #1e3a5f;
+        }
+        .nai-command-card-c .nai-command-card-label {
+            background: #2563eb;
+            color: white;
+        }
+        .nai-command-card-uc {
+            background: #fff1f2;
+            border-color: #fda4af;
+            color: #6f1d2c;
+        }
+        .nai-command-card-uc .nai-command-card-label {
+            background: #e11d48;
+            color: white;
+        }
+        .nai-command-card-ntags {
+            background: #fffbeb;
+            border-color: #fcd34d;
+            color: #62420b;
+        }
+        .nai-command-card-ntags .nai-command-card-label {
+            background: #d97706;
+            color: white;
+        }
         .error-message { color: #d93025; background-color: #fce8e6; border: 1px solid #fcc1b9; padding: 0.8rem; border-radius: 4px; margin-top: 1rem; font-size: 0.9em; }
         .info-message { color: #374151; background-color: #f3f4f6; border: 1px solid #d1d5db; padding: 0.8rem; border-radius: 4px; margin-top: 1rem; font-size: 0.9em; }
         .image-preview { margin-top: 0.5rem; margin-bottom: 1rem; max-width: 200px; max-height: 200px; object-fit: contain; border: 1px solid #e2e8f0; border-radius: 4px; display: block; }
@@ -96,7 +168,7 @@
 </head>
 <body class="bg-gray-100 p-2 sm:p-4 md:p-8">
     <div class="container mx-auto max-w-4xl bg-white p-4 sm:p-6 rounded-lg shadow-md">
-        <h1 class="text-xl sm:text-2xl font-bold mb-4 text-gray-800">图片元数据提取器(V20251025)</h1>
+        <h1 class="text-xl sm:text-2xl font-bold mb-4 text-gray-800">图片元数据提取器</h1>
         <p class="text-xs sm:text-sm text-gray-600 mb-4">选择、拖放或粘贴 PNG/JPG/WEBP 图片。最新结果显示在上方。</p>
 
         <div id="dropZone">
@@ -329,6 +401,58 @@
         function highlightJson(jsonString) { /* ... (highlighting code) ... */ if (!jsonString) return ''; jsonString = jsonString.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); return jsonString.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) { let cls = 'json-number'; if (/^"/.test(match)) { if (/:$/.test(match)) { cls = 'json-key'; } else { cls = 'json-string'; } } else if (/true|false/.test(match)) { cls = 'json-boolean'; } else if (/null/.test(match)) { cls = 'json-null'; } return '<span class="' + cls + '">' + match + '</span>'; }); }
         function formatJsonForDisplay(data) { /* ... (JSON formatting code) ... */ if (data === null || data === undefined) return ''; try { const replacer = (key, value) => { if (value && typeof value === 'object' && value.description !== undefined) { return value.description; } if (typeof value === 'bigint') { return value.toString() + 'n'; } if (key === 'MakerNote' && typeof value?.description === 'string' && value.description.includes('bytes)')) return "[MakerNote data omitted]"; if (key === 'UserComment' && typeof value?.description === 'string' && value.description.includes('bytes)')) return "[UserComment data omitted]"; return value; }; return JSON.stringify(data, replacer, 2); } catch (e) { console.error("Error formatting JSON for display:", e); return String(data); } }
 
+        // Display formatted NAI text as readable sections while preserving the original copy text.
+        function renderNaiCommand(text) {
+            if (!text) return '<div class="nai-command-view">[无格式化文本]</div>';
+
+            const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+            const html = [];
+
+            const card = (type, label, value) => {
+                html.push(
+                    `<div class="nai-command-card nai-command-card-${type}">` +
+                    `<span class="nai-command-card-label">${label}</span>` +
+                    `<span>${escapeHtml(value.trim())}</span>` +
+                    `</div>`
+                );
+            };
+
+            for (const originalLine of lines) {
+                const line = originalLine.trim();
+
+                if (!line) {
+                    html.push('<div class="nai-command-spacer"></div>');
+                    continue;
+                }
+
+                if (/^c\s*=/.test(line)) {
+                    const body = line.replace(/^c\s*=\s*/, '');
+                    const ucMatch = body.match(/^(.*?)\s+uc\s*=\s*([\s\S]*)$/);
+                    if (ucMatch) {
+                        card('c', 'C', ucMatch[1]);
+                        card('uc', 'UC', ucMatch[2]);
+                    } else {
+                        card('c', 'C', body);
+                    }
+                    continue;
+                }
+
+                if (/^uc\s*=/.test(line)) {
+                    card('uc', 'UC', line.replace(/^uc\s*=\s*/, ''));
+                    continue;
+                }
+
+                if (/^ntags?\s*=/.test(line)) {
+                    card('ntags', 'NTAG', line.replace(/^ntags?\s*=\s*/, ''));
+                    continue;
+                }
+
+                html.push(`<div class="nai-command-plain">${escapeHtml(originalLine)}</div>`);
+            }
+
+            return `<div class="nai-command-view">${html.join('')}</div>`;
+        }
+
         // --- Function to toggle JSON view ---
         function toggleJsonView(button) {
             const preId = button.dataset.target;
@@ -446,7 +570,7 @@
                              <button onclick="copyToClipboard(this, document.getElementById('${textId}-raw').value)" class="copy-button float-right">复制文本</button>
                              <span class="copy-feedback float-right mr-2"></span>
                              <textarea id="${textId}-raw" class="copy-textarea" readonly>${escapeHtml(rawFormattedText)}</textarea>
-                             <pre id="${textId}">${escapeHtml(rawFormattedText) || '[无格式化文本]'}</pre>
+                             <div id="${textId}">${renderNaiCommand(rawFormattedText)}</div>
                          </div>
                          <div class="mb-3">
                               <h3 class="text-md font-semibold mb-1 text-gray-700 inline-block">原始 LSB JSON 数据:</h3>
@@ -540,7 +664,7 @@
                                              <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
                                              <span class="copy-feedback float-right mr-2"></span>
                                              <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
-                                             <pre id="${naiAttemptId}">${escapeHtml(rawNaiFormattedText)}</pre>
+                                             <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText)}</div>
                                          </div>`;
                                      dataFound = true; 
                                      naiFormattedFromPng = true; // Mark success
@@ -590,7 +714,7 @@
                                          <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
                                          <span class="copy-feedback float-right mr-2"></span>
                                          <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
-                                         <pre id="${naiAttemptId}">${escapeHtml(rawNaiFormattedText)}</pre>
+                                         <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText)}</div>
                                      </div>`; 
                                  dataFound = true;
                                  naiFormattedFromExif = true; // Mark success
