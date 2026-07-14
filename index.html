@@ -85,12 +85,17 @@
             border: 1px solid;
             border-left-width: 5px;
             border-radius: 0.45rem;
-            white-space: pre-wrap;
             word-break: break-word;
+        }
+        .nai-command-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.45rem;
         }
         .nai-command-card-label {
             display: inline-block;
-            margin-right: 0.55rem;
             padding: 0.08rem 0.42rem;
             border-radius: 999px;
             font-family: sans-serif;
@@ -98,6 +103,34 @@
             font-weight: 700;
             letter-spacing: 0.02em;
             vertical-align: 0.08rem;
+        }
+        .nai-command-card-copy-wrap {
+            display: inline-flex;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .nai-command-card-copy {
+            padding: 0.15rem 0.55rem;
+            border: 1px solid rgba(0, 0, 0, 0.18);
+            border-radius: 0.3rem;
+            background: rgba(255, 255, 255, 0.82);
+            color: #374151;
+            font-family: sans-serif;
+            font-size: 0.72rem;
+            line-height: 1.45;
+            cursor: pointer;
+        }
+        .nai-command-card-copy:hover {
+            background: #ffffff;
+        }
+        .nai-command-card-copy-wrap .copy-feedback {
+            min-width: 0;
+            margin-left: 0.35rem;
+            white-space: nowrap;
+        }
+        .nai-command-card-content {
+            white-space: pre-wrap;
+            word-break: break-word;
         }
         .nai-command-card-c {
             background: #eff6ff;
@@ -142,19 +175,17 @@
         .copy-textarea { position: fixed; top: -9999px; left: -9999px; width: 2em; height: 2em; padding: 0; border: none; outline: none; box-shadow: none; background: transparent; }
         /* Styles for collapsible JSON view */
         .collapsible-pre {
-            max-height: 6.5rem; /* ~4 lines with padding */
-            overflow-y: hidden;
-            transition: max-height 0.3s ease-in-out;
-            border-bottom: none;
-            border-bottom-left-radius: 0;
-            border-bottom-right-radius: 0;
-        }
-        .collapsible-pre.expanded {
-            max-height: 150vh; /* A large value, effectively removing the limit */
-            overflow-y: auto; /* 允许在内容超长时滚动 */
+            display: none;
+            max-height: none;
+            overflow: visible;
             border-bottom: 1px solid #dee2e6;
             border-bottom-left-radius: 0.25rem;
             border-bottom-right-radius: 0.25rem;
+        }
+        .collapsible-pre.expanded {
+            display: block;
+            max-height: none;
+            overflow: visible;
         }
         .toggle-view-button {
             border: 1px solid #dee2e6;
@@ -422,10 +453,27 @@
             const card = (type, label, value) => {
                 const cleaned = String(value ?? '').trim();
                 if (!cleaned) return;
+
+                const copyPrefixes = {
+                    prompt: 'prompt=',
+                    c: 'c=',
+                    uc: 'uc=',
+                    ntags: 'ntags='
+                };
+                const copyText = (copyPrefixes[type] || '') + cleaned;
+                const copyId = generateUniqueId(`nai-card-${type}`);
+
                 html.push(
                     `<div class="nai-command-card nai-command-card-${type}">` +
+                    `<div class="nai-command-card-header">` +
                     `<span class="nai-command-card-label">${label}</span>` +
-                    `<span>${escapeHtml(cleaned)}</span>` +
+                    `<span class="nai-command-card-copy-wrap">` +
+                    `<button type="button" class="nai-command-card-copy" onclick="copyToClipboard(this, document.getElementById('${copyId}').value)">复制</button>` +
+                    `<span class="copy-feedback"></span>` +
+                    `</span>` +
+                    `</div>` +
+                    `<div class="nai-command-card-content">${escapeHtml(cleaned)}</div>` +
+                    `<textarea id="${copyId}" class="copy-textarea" readonly>${escapeHtml(copyText)}</textarea>` +
                     `</div>`
                 );
             };
@@ -597,20 +645,12 @@
                      const rawJsonString = jsonString || '';
                      const rawYamlString = yamlString || '';
 
-                     // Check if the JSON is long enough to be collapsed
-                     const lineCount = (rawJsonString.match(/\n/g) || []).length + 1;
-                     const isCollapsible = lineCount > 4;
-
-                     let jsonDisplayHtml;
-                     if (isCollapsible) {
-                         jsonDisplayHtml = `
-                             <div>
-                                 <pre id="${jsonId}" class="collapsible-pre">${highlightedJsonHtml || '[无 JSON 数据]'}</pre>
-                                 <div class="toggle-view-button" data-target="${jsonId}" onclick="toggleJsonView(this)">显示全部</div>
-                             </div>`;
-                     } else {
-                         jsonDisplayHtml = `<pre id="${jsonId}">${highlightedJsonHtml || '[无 JSON 数据]'}</pre>`;
-                     }
+                     // Raw JSON is fully collapsed by default and only rendered after clicking “显示全部”.
+                     const jsonDisplayHtml = `
+                         <div>
+                             <pre id="${jsonId}" class="collapsible-pre">${highlightedJsonHtml || '[无 JSON 数据]'}</pre>
+                             <div class="toggle-view-button" data-target="${jsonId}" onclick="toggleJsonView(this)">显示全部</div>
+                         </div>`;
 
 
                      resultBlockContent.innerHTML = `
