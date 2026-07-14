@@ -10,7 +10,8 @@
 - 支援 PNG、JPG/JPEG、WEBP
 - 優先讀取 NovelAI `stealth_pngcomp` LSB 元數據
 - 顯示 AI 繪圖機器人指令
-- 使用不同顏色方塊分開顯示 `c`、`uc` 和 `ntags`
+- 使用不同顏色方塊分開顯示 `prompt`、`c`、`uc` 和 `ntags`
+- 多行角色提示詞會完整保留在同一個 `c` 方塊，配對的 `uc` 會獨立顯示
 - 顯示及複製原始 JSON
 - 最新結果顯示在上方
 - 清空所有結果
