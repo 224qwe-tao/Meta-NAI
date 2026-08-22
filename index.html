@@ -104,6 +104,19 @@
             letter-spacing: 0.02em;
             vertical-align: 0.08rem;
         }
+        .nai-command-card-position {
+            display: inline-block;
+            margin-left: 0.45rem;
+            padding: 0.08rem 0.38rem;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(37, 99, 235, 0.22);
+            color: #475569;
+            font-family: sans-serif;
+            font-size: 0.68rem;
+            font-weight: 600;
+            vertical-align: 0.08rem;
+        }
         .nai-command-card-copy-wrap {
             display: inline-flex;
             align-items: center;
@@ -263,82 +276,340 @@
         class LSBExtractor { /* ... */ constructor(imageData) { const width = imageData.width; const height = imageData.height; const pixelData = imageData.data; const alphaLsbColumnMajor = []; for (let x = 0; x < width; x++) { for (let y = 0; y < height; y++) { const pixelIndex = (y * width + x) * 4; const alphaValue = pixelData[pixelIndex + 3]; alphaLsbColumnMajor.push(alphaValue & 1); } } this.data = byteize(alphaLsbColumnMajor); this.pos = 0; console.log(`LSBExtractor (Column-Major): Image ${width}x${height}, Packed ${this.data.length} bytes.`); } getNextNBytes(n) { if (this.pos + n > this.data.length) { const available = this.data.length - this.pos; throw new Error(`尝试读取 ${n} 字节失败：数据不足 (需要 ${n}, 剩余 ${available})`); } const nBytes = this.data.slice(this.pos, this.pos + n); this.pos += n; return nBytes; } read32BitInteger() { const bytesList = this.getNextNBytes(4); const dataView = new DataView(bytesList.buffer, bytesList.byteOffset, bytesList.byteLength); return dataView.getUint32(0, false); } }
         function extractMetadataFromImageData(imageData) { /* ... (LSB extraction logic - unchanged) ... */ console.log("尝试 LSB 提取..."); const reader = new LSBExtractor(imageData); const magicBytes = reader.getNextNBytes(magic.length); const readMagic = new TextDecoder("utf-8").decode(magicBytes); console.log(`LSB 读取到的 Magic: "${readMagic}"`); if (magic !== readMagic) { try { const peekReader = new LSBExtractor(imageData); const firstBytes = peekReader.data.slice(0, 30); console.error("LSB 提取到的原始数据前 30 字节 (十六进制):", [...firstBytes].map(b => b.toString(16).padStart(2, '0')).join(' ')); } catch(debugErr) {} throw new Error(`LSB Magic Number 不匹配：预期 "${magic}", 得到 "${readMagic}"`); } console.log("LSB Magic Number 匹配成功！"); const readLenBits = reader.read32BitInteger(); console.log(`LSB 读取到的压缩数据长度 (bits): ${readLenBits}`); const readLenBytes = Math.ceil(readLenBits / 8); if (readLenBytes <= 0 || !Number.isInteger(readLenBytes)) { throw new Error(`LSB 读取到的数据长度无效 (${readLenBits} bits -> ${readLenBytes} bytes)。`); } console.log(`LSB 预期读取 ${readLenBytes} 字节的压缩 JSON 数据。`); const compressedJsonData = reader.getNextNBytes(readLenBytes); console.log(`LSB 成功读取 ${compressedJsonData.length} 字节的压缩数据。`); if (compressedJsonData.length < readLenBytes) { console.warn(`LSB 警告：预期读取 ${readLenBytes} 字节，但实际只读取到 ${compressedJsonData.length} 字节。解压缩可能失败。`); } console.log("LSB 使用 pako 进行 Gzip 解压缩..."); const decompressedData = pako.inflate(compressedJsonData); console.log(`LSB Gzip 解压缩成功，得到 ${decompressedData.length} 字节的数据。`); const jsonDataString = new TextDecoder("utf-8").decode(decompressedData); console.log("LSB UTF-8 解码成功。"); const jsonData = JSON.parse(jsonDataString); console.log("LSB JSON 解析成功。"); if (jsonData.Comment && typeof jsonData.Comment === 'string') { try { jsonData.Comment = JSON.parse(jsonData.Comment); console.log("LSB 成功解析内嵌的 'Comment' JSON 字符串。"); } catch (e) { console.warn("LSB 无法将 'Comment' 字段解析为 JSON，将保持其为字符串。错误:", e.message); } } let yamlData = null; try { console.log("LSB 生成 YAML 数据..."); yamlData = jsyaml.dump(jsonData, { flowLevel: -1, sortKeys: false, lineWidth: -1 }); console.log("LSB YAML 生成成功。"); } catch (yamlError) { console.error("LSB 生成 YAML 时出错:", yamlError); } console.log("LSB 元数据提取完成。"); return { jsonData, yamlData }; }
 
-        // --- Formatting Logic (NAI Specific - Modified vt check) ---
-        const colMapRev = {'A': 0.1, 'B': 0.3, 'C': 0.5, 'D': 0.7, 'E': 0.9}; const rowMapRev = {'1': 0.1, '2': 0.3, '3': 0.5, '4': 0.7, '5': 0.9}; const toleranceRev = 1e-6; const defaultCoordsRev = { x: 0.5, y: 0.5 }; function isClose(a, b, tolerance) { return Math.abs(a - b) < tolerance; } function getPositionCodeRev(x, y, useCoordsFlag = true) { if (!useCoordsFlag) return ""; const isDefault = isClose(x, defaultCoordsRev.x, toleranceRev) && isClose(y, defaultCoordsRev.y, toleranceRev); if (isDefault) return ""; let foundCol = null, foundRow = null; for (const key in colMapRev) if (isClose(x, colMapRev[key], toleranceRev)) { foundCol = key; break; } for (const key in rowMapRev) if (isClose(y, rowMapRev[key], toleranceRev)) { foundRow = key; break; } return (foundCol && foundRow) ? `#${foundCol}${foundRow}` : ""; } function listsToStringStrictPairingV3(v4Prompt, v4Negative = null, baseString = "", useCoords = true) { if (!Array.isArray(v4Prompt)) { console.error("Error: v4_prompt input is not an array."); return baseString; } let pairParts = []; const negativeList = Array.isArray(v4Negative) ? v4Negative : []; for (let i = 0; i < v4Prompt.length; i++) { const promptItem = v4Prompt[i]; try { const pCaption = promptItem?.char_caption || ''; const centers = promptItem?.centers; let coords = defaultCoordsRev; if (centers && Array.isArray(centers) && centers.length > 0 && typeof centers[0] === 'object' && centers[0] !== null) { coords = { x: centers[0]?.x ?? defaultCoordsRev.x, y: centers[0]?.y ?? defaultCoordsRev.y }; } const positionCode = getPositionCodeRev(coords.x, coords.y, useCoords); const cPart = ` c=${pCaption}${positionCode}`; let ucPart = ""; if (i < negativeList.length) { const negativeItem = negativeList[i]; if (typeof negativeItem === 'object' && negativeItem !== null) { const nCaption = (negativeItem?.char_caption || '').trim(); if (nCaption) ucPart = ` uc=${nCaption}`; } } pairParts.push(cPart + ucPart); } catch (e) { console.error(`Error processing index ${i}: ${e}. Skipping this item.`); continue; } } const addedString = pairParts.join(""); let finalString = baseString || ""; const trailerMarkers = [" ntags=", " negprompt=", " neg=", " negative=", " #", " /"]; let insertPos = finalString.length; for (const marker of trailerMarkers) { try { const pos = finalString.indexOf(marker); if (pos !== -1) insertPos = Math.min(insertPos, pos); } catch (e) { console.error("Error finding marker:", e); break; } } finalString = finalString.substring(0, insertPos) + addedString + finalString.substring(insertPos); finalString = finalString.replace(/\s\s+/g, ' ').trim(); return finalString; }
-        
-        // --- MODIFICATION: Updated formatMetadataToText (Fix 1) ---
-        function formatMetadataToText(jsonData) {
-            if (!jsonData || typeof jsonData !== 'object') { return { txt: "格式化错误：输入不是有效的对象。", details: {} }; }
-            
-            // --- MODIFICATION START (Fix 1 & 2 Logic) ---
-            // Determine the *actual* object that holds the parameters (steps, uc, etc.)
-            let effectiveComment;
-            if (jsonData.Comment && typeof jsonData.Comment === 'object') {
-                // This is the standard LSB format, or a fallback where Comment was correctly parsed and nested.
-                effectiveComment = jsonData.Comment;
-                console.log("formatMetadataToText: Using nested 'Comment' object.");
-            } else {
-                // This is a fallback format (PNG chunk, or faked EXIF object)
-                // jsonData itself *is* the comment object.
-                effectiveComment = jsonData;
-                console.log("formatMetadataToText: Using top-level object as 'effectiveComment'.");
+        // --- Formatting Logic (NovelAI V3 / V4 / V4.5 / V5) ---
+        const colMapRev = {'A': 0.1, 'B': 0.3, 'C': 0.5, 'D': 0.7, 'E': 0.9};
+        const rowMapRev = {'1': 0.1, '2': 0.3, '3': 0.5, '4': 0.7, '5': 0.9};
+        const toleranceRev = 1e-6;
+        const defaultCoordsRev = { x: 0.5, y: 0.5 };
+
+        function isClose(a, b, tolerance) {
+            return Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Math.abs(Number(a) - Number(b)) < tolerance;
+        }
+
+        function normalizeCoordinate(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return null;
+            return Math.round(n * 1000) / 1000;
+        }
+
+        function getPositionCodeRev(x, y, useCoordsFlag = true) {
+            if (!useCoordsFlag) return "";
+            const isDefault = isClose(x, defaultCoordsRev.x, toleranceRev) && isClose(y, defaultCoordsRev.y, toleranceRev);
+            if (isDefault) return "";
+
+            let foundCol = null;
+            let foundRow = null;
+            for (const key in colMapRev) {
+                if (isClose(x, colMapRev[key], toleranceRev)) { foundCol = key; break; }
+            }
+            for (const key in rowMapRev) {
+                if (isClose(y, rowMapRev[key], toleranceRev)) { foundRow = key; break; }
             }
 
-            // Now, check if we have *any* data to proceed.
-            // We need *either* parameters in effectiveComment (like 'steps' or 'uc') OR a top-level Description.
-            if (Object.keys(effectiveComment).length === 0 && jsonData.Description === undefined) {
-                 return { txt: `格式化警告：输入 JSON 结构不完整 (缺少 'Comment' 对象或 'Description')。无法生成 NAI 格式文本。\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`, details: {} };
+            // V4/V4.5 used the old 5x5 grid. Keep the legacy #A1-style suffix when the
+            // coordinates exactly match that grid. V5 allows free positioning, so arbitrary
+            // coordinates are preserved separately in details instead of being forced into a grid.
+            return (foundCol && foundRow) ? `#${foundCol}${foundRow}` : "";
+        }
+
+        function listsToStringStrictPairingV3(v4Prompt, v4Negative = null, baseString = "", useCoords = true, positionCollector = null) {
+            if (!Array.isArray(v4Prompt)) {
+                console.error("Error: v4_prompt input is not an array.");
+                return baseString;
             }
-            // --- MODIFICATION END ---
+
+            const pairParts = [];
+            const negativeList = Array.isArray(v4Negative) ? v4Negative : [];
+
+            for (let i = 0; i < v4Prompt.length; i++) {
+                const promptItem = v4Prompt[i];
+                try {
+                    const pCaption = promptItem?.char_caption || '';
+                    const centers = promptItem?.centers;
+                    let coords = defaultCoordsRev;
+                    let hasExplicitCoords = false;
+
+                    if (centers && Array.isArray(centers) && centers.length > 0 && typeof centers[0] === 'object' && centers[0] !== null) {
+                        coords = {
+                            x: centers[0]?.x ?? defaultCoordsRev.x,
+                            y: centers[0]?.y ?? defaultCoordsRev.y
+                        };
+                        hasExplicitCoords = true;
+                    }
+
+                    const positionCode = getPositionCodeRev(coords.x, coords.y, useCoords);
+                    const cPart = ` c=${pCaption}${positionCode}`;
+                    let ucPart = "";
+
+                    if (i < negativeList.length) {
+                        const negativeItem = negativeList[i];
+                        if (typeof negativeItem === 'object' && negativeItem !== null) {
+                            const nCaption = (negativeItem?.char_caption || '').trim();
+                            if (nCaption) ucPart = ` uc=${nCaption}`;
+                        }
+                    }
+
+                    if (Array.isArray(positionCollector)) {
+                        positionCollector.push({
+                            index: i,
+                            x: normalizeCoordinate(coords.x),
+                            y: normalizeCoordinate(coords.y),
+                            useCoords: Boolean(useCoords),
+                            explicit: hasExplicitCoords,
+                            legacyCode: positionCode
+                        });
+                    }
+
+                    pairParts.push(cPart + ucPart);
+                } catch (e) {
+                    console.error(`Error processing character index ${i}: ${e}. Skipping this item.`);
+                }
+            }
+
+            const addedString = pairParts.join("");
+            let finalString = baseString || "";
+            const trailerMarkers = [" ntags=", " negprompt=", " neg=", " negative=", " #", " /"];
+            let insertPos = finalString.length;
+            for (const marker of trailerMarkers) {
+                const pos = finalString.indexOf(marker);
+                if (pos !== -1) insertPos = Math.min(insertPos, pos);
+            }
+            finalString = finalString.substring(0, insertPos) + addedString + finalString.substring(insertPos);
+            return finalString.replace(/\s\s+/g, ' ').trim();
+        }
+
+        function detectNovelAiModel(source, effectiveComment) {
+            const sourceText = String(source || '');
+            const modelName = String(effectiveComment?.model_name || '');
+            const modelHash = String(effectiveComment?.model_hash || '').toUpperCase();
+            const combined = `${sourceText} ${modelName}`;
+
+            // V5 launched with Full and Curated. Current launch hashes observed in genuine V5
+            // metadata are included, while generic V5 detection remains in place for future hashes.
+            if (/NovelAI Diffusion V5/i.test(combined)) {
+                const detectedHash = modelHash || ((sourceText.match(/\b([A-F0-9]{8})\b/i) || [])[1] || '').toUpperCase();
+                if (detectedHash === '0ADF9AB7') {
+                    return { commandToken: 'nai5', label: 'NAI5 Full', family: 'v5', modelHash: detectedHash };
+                }
+                if (detectedHash === 'DB276663') {
+                    return { commandToken: 'nai5c', label: 'NAI5 Curated', family: 'v5', modelHash: detectedHash };
+                }
+                return { commandToken: 'nai5', label: 'NAI5', family: 'v5', modelHash: detectedHash };
+            }
+
+            if (sourceText.includes('NovelAI Diffusion V4.5 B5A2A797')) {
+                return { commandToken: 'nai4.5c', label: 'NAI4.5 测试版', family: 'v4.5', modelHash };
+            }
+            if (sourceText.includes('NovelAI Diffusion V4.5 B9F340FD') || sourceText.includes('NovelAI Diffusion V4.5')) {
+                return { commandToken: 'nai4.5', label: 'NAI4.5', family: 'v4.5', modelHash };
+            }
+            if (sourceText.includes('NovelAI Diffusion V4 F6E18726') || sourceText.includes('NovelAI Diffusion V4 C1CCBA86')) {
+                return { commandToken: 'nai4c', label: 'NAI4 测试版', family: 'v4', modelHash };
+            }
+            if (sourceText.includes('NovelAI Diffusion V4 4F49EC75') || sourceText.includes('NovelAI Diffusion V4 79F47848') || sourceText.includes('NovelAI Diffusion V4')) {
+                return { commandToken: 'nai4', label: 'NAI4', family: 'v4', modelHash };
+            }
+            if (/NovelAI Diffusion/i.test(combined)) {
+                return { commandToken: '', label: 'NAI3', family: 'v3', modelHash };
+            }
+            return { commandToken: '', label: 'NAI', family: 'unknown', modelHash };
+        }
+
+        function formatMetadataToText(jsonData) {
+            if (!jsonData || typeof jsonData !== 'object') {
+                return { txt: "格式化错误：输入不是有效的对象。", details: {} };
+            }
+
+            let effectiveComment;
+            if (jsonData.Comment && typeof jsonData.Comment === 'object') {
+                effectiveComment = jsonData.Comment;
+            } else {
+                effectiveComment = jsonData;
+            }
+
+            if (Object.keys(effectiveComment).length === 0 && jsonData.Description === undefined) {
+                return {
+                    txt: `格式化警告：输入 JSON 结构不完整 (缺少 'Comment' 对象或 'Description')。无法生成 NAI 格式文本。\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`,
+                    details: {}
+                };
+            }
 
             try {
                 let usedDescriptionFallback = false;
-                let prompt = effectiveComment.prompt || ''; // Get prompt from params object
-                if (!prompt && jsonData.Description) { // Fallback to top-level Description
+                let prompt = effectiveComment.prompt || '';
+                if (!prompt && jsonData.Description) {
                     prompt = jsonData.Description;
                     usedDescriptionFallback = true;
-                    console.log("formatMetadataToText: Using jsonData.Description as fallback prompt.");
                 }
-                
-                // All other params *must* come from effectiveComment
-                const steps = effectiveComment.steps || 'N/A';
-                const uc = effectiveComment.uc || ''; // This gets ntags
+
+                const steps = effectiveComment.steps ?? 'N/A';
+                const uc = effectiveComment.uc || '';
                 const vt = effectiveComment.reference_strength_multiple;
                 const hasVibeTransfer = Array.isArray(vt) && vt.length > 0;
                 const directorRef = effectiveComment.director_reference_strengths;
                 const hasCharRef = Array.isArray(directorRef) && directorRef.length > 0;
-                const request_type = effectiveComment.request_type; 
-                let sampler = effectiveComment.sampler || 'k_euler'; 
-                const seed = effectiveComment.seed || 'N/A'; 
-                const height = effectiveComment.height || 'N/A'; 
-                const width = effectiveComment.width || 'N/A'; 
-                const scale = effectiveComment.scale; 
-                let cfg_rescale = effectiveComment.cfg_rescale; 
-                const ns = effectiveComment.noise_schedule; 
-                const dynamic_thresholding = effectiveComment.dynamic_thresholding; 
-                const skip_cfg_above_sigma = effectiveComment.skip_cfg_above_sigma; 
-                const prefer_brownian = effectiveComment.prefer_brownian; 
-                const source = jsonData.Source || (effectiveComment.Source || 'N/A'); 
-                let charCaptionsTxt = ''; 
-                const v4Prompt = effectiveComment.v4_prompt; 
-                const v4NegativePrompt = effectiveComment.v4_negative_prompt; 
-                // --- (Rest of the function is standard logic) ---
-                let charCaptionsN = []; if (v4NegativePrompt && v4NegativePrompt.caption && Array.isArray(v4NegativePrompt.caption.char_captions)) charCaptionsN = v4NegativePrompt.caption.char_captions; if (v4Prompt && v4Prompt.caption && Array.isArray(v4Prompt.caption.char_captions)) { const charCaptions = v4Prompt.caption.char_captions; const useCoords = v4Prompt.use_coords ?? true; charCaptionsTxt = listsToStringStrictPairingV3(charCaptions, charCaptionsN, '', useCoords); charCaptionsTxt = charCaptionsTxt.replace(/(?<!u)c=/g, '\nc='); } const samplerMap = { 'k_euler': 'Euler', 'k_euler_ancestral': 'Euler a', 'k_dpmpp_2s_ancestral': 'DPM++ 2S a', 'k_dpmpp_2m': 'DPM++ 2M', 'k_dpmpp_sde': 'DPM++ SDE', 'k_dpmpp_2m_sde': 'DPM++ 2M SDE', 'ddim': 'DDIM' }; sampler = samplerMap[sampler] || 'Euler'; const sm = effectiveComment.sm; const sm_dyn = effectiveComment.sm_dyn; let naiType = ''; let allIf = ''; let allFIf = ''; 
-                
-                let naiVersion = 'NAI3'; // Default
-                if (source.includes('NovelAI Diffusion V4.5 B5A2A797') || source.includes('NovelAI Diffusion V4.5 B5A2A797')) { allFIf += ' nai4.5c'; naiVersion = 'NAI4.5 测试版'; } 
-                else if (source.includes('NovelAI Diffusion V4.5 B9F340FD') || source.includes('NovelAI Diffusion V4.5')) { allFIf += ' nai4.5'; naiVersion = 'NAI4.5'; } 
-                else if (source.includes('NovelAI Diffusion V4 F6E18726') || source.includes('NovelAI Diffusion V4 C1CCBA86')) { allFIf += ' nai4c'; naiVersion = 'NAI4 测试版'; } 
-                else if (source.includes('NovelAI Diffusion V4 4F49EC75') || source.includes('NovelAI Diffusion V4 79F47848') || source.includes('NovelAI Diffusion V4')) { allFIf += ' nai4'; naiVersion = 'NAI4'; }
+                const requestType = effectiveComment.request_type;
+                let sampler = effectiveComment.sampler || 'k_euler';
+                const seed = effectiveComment.seed ?? 'N/A';
+                const height = effectiveComment.height ?? 'N/A';
+                const width = effectiveComment.width ?? 'N/A';
+                const scale = effectiveComment.scale;
+                let cfgRescale = effectiveComment.cfg_rescale;
+                const noiseSchedule = effectiveComment.noise_schedule;
+                const dynamicThresholding = effectiveComment.dynamic_thresholding;
+                const skipCfgAboveSigma = effectiveComment.skip_cfg_above_sigma;
+                const preferBrownian = effectiveComment.prefer_brownian;
+                const source = jsonData.Source || effectiveComment.Source || '';
+                const model = detectNovelAiModel(source, effectiveComment);
+                const isV5 = model.family === 'v5';
 
-                if (usedDescriptionFallback) {
+                const characterPositions = [];
+                let charCaptionsTxt = '';
+                const structuredPrompt = effectiveComment.v4_prompt;
+                const structuredNegativePrompt = effectiveComment.v4_negative_prompt;
+                let charCaptionsNegative = [];
+
+                if (structuredNegativePrompt?.caption && Array.isArray(structuredNegativePrompt.caption.char_captions)) {
+                    charCaptionsNegative = structuredNegativePrompt.caption.char_captions;
+                }
+
+                if (structuredPrompt?.caption && Array.isArray(structuredPrompt.caption.char_captions)) {
+                    const charCaptions = structuredPrompt.caption.char_captions;
+                    const useCoords = structuredPrompt.use_coords ?? true;
+                    charCaptionsTxt = listsToStringStrictPairingV3(
+                        charCaptions,
+                        charCaptionsNegative,
+                        '',
+                        useCoords,
+                        characterPositions
+                    );
+                    charCaptionsTxt = charCaptionsTxt.replace(/(?<!u)c=/g, '\nc=');
+                }
+
+                const samplerMap = {
+                    'k_euler': 'Euler',
+                    'k_euler_ancestral': 'Euler a',
+                    'k_dpmpp_2s_ancestral': 'DPM++ 2S a',
+                    'k_dpmpp_2m': 'DPM++ 2M',
+                    'k_dpmpp_sde': 'DPM++ SDE',
+                    'k_dpmpp_2m_sde': 'DPM++ 2M SDE',
+                    'ddim': 'DDIM'
+                };
+                sampler = samplerMap[sampler] || sampler || 'Euler';
+
+                const sm = effectiveComment.sm;
+                const smDyn = effectiveComment.sm_dyn;
+                let naiType = '';
+                let allInfo = '';
+                let commandParams = '';
+                let naiVersion = model.label;
+
+                if (model.commandToken) commandParams += ` ${model.commandToken}`;
+
+                if (usedDescriptionFallback && model.family === 'unknown') {
                     naiVersion = 'NAI初代';
                 }
 
                 if (hasCharRef) naiType = '[角色参考(Character Reference)]';
                 if (hasVibeTransfer) naiType += '[氛围转移(Vibe Transfer)]';
-                if (request_type === 'Img2ImgRequest') naiType += '[以图画图(Image to Image)]'; else if (request_type === 'NativeInfillingRequest') naiType = '[局部重绘(Inpainting)]'; if (!naiType) naiType = '[文生图(Text to Image)]'; const scaleL = { "长图": {height: 1536, width: 512}, "长幅": {height: 1728, width: 576}, "宽图": {height: 832, width: 1216}, "横图": {height: 512, width: 1536}, "横幅": {height: 576, width: 1728}, "方图": {height: 1024, width: 1024} }; for (const name in scaleL) if (height === scaleL[name].height && width === scaleL[name].width) { allFIf += ` ${name}`; break; } if (sm && sm_dyn) { allFIf += ' SMEA'; allIf += ' | 已开启 SMEA+DYN'; } else if (sm && !sm_dyn) { allFIf += ' SMEAnoDYN'; allIf += ' | 已开启 SMEA'; } if (sampler !== 'Euler') allFIf += ` ${sampler}`; if (typeof scale === 'number' && scale !== 5) { allIf += ` | scale:${scale}`; allFIf += ` scale=${scale}`; } function isDivisibleBy002(number) { try { const scaled = number * 100; return Math.abs(scaled - Math.round(scaled)) < 1e-9 && Math.round(scaled) % 2 === 0; } catch { return false; }} if (cfg_rescale !== undefined && cfg_rescale !== null) { let numCfgRescale = Number(cfg_rescale); if (!isNaN(numCfgRescale) && numCfgRescale !== 0) { if (!isDivisibleBy002(numCfgRescale)) numCfgRescale = parseFloat((numCfgRescale + 0.01).toFixed(2)); allIf += ` | cfg_rescale:${numCfgRescale}`; allFIf += ` cfg_rescale=${numCfgRescale}`; } } if (ns && ns !== 'native') { allIf += ` | noise_schedule:${ns}`; allFIf += ` ns=${ns}`; if (!prefer_brownian) allFIf += ' prefer_brownian=false'; } if (dynamic_thresholding) allIf += ' ot=decrisp'; if (typeof skip_cfg_above_sigma === 'number' && skip_cfg_above_sigma > 0) allIf += ' ot=variety'; if (typeof steps === 'number' && steps !== 28) allIf += ` steps=${steps}`; allFIf = allFIf.trim(); let txt = ''; if (allFIf) txt = `/绘画 参数=${allFIf}\n\nprompt=${prompt}${charCaptionsTxt ? '\n' + charCaptionsTxt : ''}\nntags=${uc}\n\n生成类型${naiVersion}:${naiType} | 采样器:${sampler} | ${width}X${height}${allIf} | seed=${seed}`; else txt = `/绘画\n\nprompt=${prompt}${charCaptionsTxt ? '\n' + charCaptionsTxt : ''}\nntags=${uc}\n\n生成类型${naiVersion}:${naiType} | 采样器:${sampler} | ${width}X${height}${allIf} | seed=${seed}`; txt = txt.replace(/\n\n+/g, '\n\n').trim(); return { txt: txt, details: {} };
-            } catch (error) { console.error("Error formatting metadata to text:", error); return { txt: `格式化 NAI 文本时出错: ${error.message}\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`, details: {} }; }
+
+                if (requestType === 'Img2ImgRequest' || requestType === 'ImageToImageRequest') {
+                    naiType += '[以图画图(Image to Image)]';
+                } else if (requestType === 'NativeInfillingRequest' || requestType === 'InpaintRequest') {
+                    naiType = '[局部重绘(Inpainting)]';
+                }
+                if (!naiType) naiType = '[文生图(Text to Image)]';
+
+                const scalePresets = {
+                    "长图": {height: 1536, width: 512},
+                    "长幅": {height: 1728, width: 576},
+                    "宽图": {height: 832, width: 1216},
+                    "横图": {height: 512, width: 1536},
+                    "横幅": {height: 576, width: 1728},
+                    "方图": {height: 1024, width: 1024},
+                    "壁纸竖图": {height: 1920, width: 1088},
+                    "壁纸横图": {height: 1088, width: 1920}
+                };
+                for (const name in scalePresets) {
+                    if (height === scalePresets[name].height && width === scalePresets[name].width) {
+                        commandParams += ` ${name}`;
+                        break;
+                    }
+                }
+
+                if (sm && smDyn) {
+                    commandParams += ' SMEA';
+                    allInfo += ' | 已开启 SMEA+DYN';
+                } else if (sm && !smDyn) {
+                    commandParams += ' SMEAnoDYN';
+                    allInfo += ' | 已开启 SMEA';
+                }
+
+                if (sampler !== 'Euler') commandParams += ` ${sampler}`;
+                if (typeof scale === 'number' && scale !== 5) {
+                    allInfo += ` | scale:${scale}`;
+                    commandParams += ` scale=${scale}`;
+                }
+
+                function isDivisibleBy002(number) {
+                    const scaled = number * 100;
+                    return Math.abs(scaled - Math.round(scaled)) < 1e-9 && Math.round(scaled) % 2 === 0;
+                }
+
+                if (cfgRescale !== undefined && cfgRescale !== null) {
+                    let numCfgRescale = Number(cfgRescale);
+                    if (!Number.isNaN(numCfgRescale) && numCfgRescale !== 0) {
+                        if (!isDivisibleBy002(numCfgRescale)) {
+                            numCfgRescale = parseFloat((numCfgRescale + 0.01).toFixed(2));
+                        }
+                        allInfo += ` | cfg_rescale:${numCfgRescale}`;
+                        commandParams += ` cfg_rescale=${numCfgRescale}`;
+                    }
+                }
+
+                if (noiseSchedule && noiseSchedule !== 'native') {
+                    allInfo += ` | noise_schedule:${noiseSchedule}`;
+                    commandParams += ` ns=${noiseSchedule}`;
+                    if (!preferBrownian) commandParams += ' prefer_brownian=false';
+                }
+
+                if (dynamicThresholding) allInfo += ' ot=decrisp';
+                if (typeof skipCfgAboveSigma === 'number' && skipCfgAboveSigma > 0) allInfo += ' ot=variety';
+                if (typeof steps === 'number' && steps !== 28) allInfo += ` steps=${steps}`;
+
+                // V5-specific fields that are useful for identifying and restoring generations.
+                const modelHash = model.modelHash || String(effectiveComment.model_hash || '');
+                if (isV5 && modelHash) allInfo += ` | model_hash:${modelHash}`;
+                if (isV5 && effectiveComment.quality_boost === true) allInfo += ' | Quality Boost:on';
+                if (isV5 && effectiveComment.tag_hint_transparent_background) allInfo += ' | Alpha Hint:on';
+
+                commandParams = commandParams.trim();
+                let txt = commandParams ? `/绘画 参数=${commandParams}` : '/绘画';
+                txt += `\n\nprompt=${prompt}`;
+                if (charCaptionsTxt) txt += `\n${charCaptionsTxt}`;
+                txt += `\nntags=${uc}`;
+                txt += `\n\n生成类型${naiVersion}:${naiType} | 采样器:${sampler} | ${width}X${height}${allInfo} | seed=${seed}`;
+                txt = txt.replace(/\n\n+/g, '\n\n').trim();
+
+                return {
+                    txt,
+                    details: {
+                        isV5,
+                        naiVersion,
+                        source,
+                        modelName: effectiveComment.model_name || '',
+                        modelHash,
+                        requestType,
+                        characterPositions
+                    }
+                };
+            } catch (error) {
+                console.error("Error formatting metadata to text:", error);
+                return {
+                    txt: `格式化 NAI 文本时出错: ${error.message}\n原始 JSON:\n${JSON.stringify(jsonData, null, 2)}`,
+                    details: {}
+                };
+            }
         }
 
         // --- PNG Chunk Reading Logic (NO CHANGES) ---
@@ -444,13 +715,14 @@
         // Display formatted NAI text as readable sections while preserving the original copy text.
         // Sections are parsed from the complete command instead of line-by-line, so multiline
         // character prompts remain inside their C card and the paired UC text is separated correctly.
-        function renderNaiCommand(text) {
+        function renderNaiCommand(text, details = {}) {
             if (!text) return '<div class="nai-command-view">[无格式化文本]</div>';
 
             const normalized = String(text).replace(/\r\n?/g, '\n');
             const html = [];
+            let cCardIndex = 0;
 
-            const card = (type, label, value) => {
+            const card = (type, label, value, position = null) => {
                 const cleaned = String(value ?? '').trim();
                 if (!cleaned) return;
 
@@ -463,10 +735,17 @@
                 const copyText = (copyPrefixes[type] || '') + cleaned;
                 const copyId = generateUniqueId(`nai-card-${type}`);
 
+                let positionBadge = '';
+                if (type === 'c' && details?.isV5 && position?.useCoords && position?.explicit && position.x !== null && position.y !== null) {
+                    const px = Math.round(position.x * 1000) / 10;
+                    const py = Math.round(position.y * 1000) / 10;
+                    positionBadge = `<span class="nai-command-card-position" title="V5 自由角色位置：x=${position.x}, y=${position.y}">位置 ${px}% / ${py}%</span>`;
+                }
+
                 html.push(
                     `<div class="nai-command-card nai-command-card-${type}">` +
                     `<div class="nai-command-card-header">` +
-                    `<span class="nai-command-card-label">${label}</span>` +
+                    `<span><span class="nai-command-card-label">${label}</span>${positionBadge}</span>` +
                     `<span class="nai-command-card-copy-wrap">` +
                     `<button type="button" class="nai-command-card-copy" onclick="copyToClipboard(this, document.getElementById('${copyId}').value)">复制</button>` +
                     `<span class="copy-feedback"></span>` +
@@ -491,8 +770,6 @@
                 }
             };
 
-            // Top-level fields generated by formatMetadataToText always start on a new line.
-            // UC is often paired inline with C, so it is split from the full C section below.
             const sectionRegex = /(^|\n)(prompt|c|uc|ntags?)\s*=\s*/g;
             const sections = [];
             let match;
@@ -509,7 +786,6 @@
                 return `<div class="nai-command-view">${html.join('')}</div>`;
             }
 
-            // Keep the command header before prompt= as normal text.
             plain(normalized.slice(0, sections[0].markerStart).replace(/\n+$/, ''));
 
             for (let i = 0; i < sections.length; i++) {
@@ -517,7 +793,6 @@
                 const nextStart = i + 1 < sections.length ? sections[i + 1].markerStart : normalized.length;
                 let value = normalized.slice(section.valueStart, nextStart);
 
-                // The final generation summary is not part of prompt/c/uc/ntags.
                 const summaryMatch = value.match(/\n\s*(生成类型[\s\S]*)$/);
                 let summary = '';
                 if (summaryMatch) {
@@ -528,15 +803,15 @@
                 if (section.type === 'prompt') {
                     card('prompt', 'PROMPT', value);
                 } else if (section.type === 'c') {
-                    // Character positive prompts may contain line breaks. The paired negative
-                    // character prompt is introduced by the generated delimiter " uc=".
+                    const position = details?.characterPositions?.[cCardIndex] || null;
+                    cCardIndex++;
                     const ucDelimiter = /\s+uc\s*=\s*/i;
                     const ucMatch = ucDelimiter.exec(value);
                     if (ucMatch) {
-                        card('c', 'C', value.slice(0, ucMatch.index));
+                        card('c', 'C', value.slice(0, ucMatch.index), position);
                         card('uc', 'UC', value.slice(ucMatch.index + ucMatch[0].length));
                     } else {
-                        card('c', 'C', value);
+                        card('c', 'C', value, position);
                     }
                 } else if (section.type === 'uc') {
                     card('uc', 'UC', value);
@@ -632,7 +907,7 @@
 
                  if (lsbSuccess && lsbData) {
                      // --- LSB Success HTML Generation ---
-                     const { txt: formattedText } = formatMetadataToText(lsbData.jsonData);
+                     const { txt: formattedText, details: formattedDetails } = formatMetadataToText(lsbData.jsonData);
                      const jsonString = JSON.stringify(lsbData.jsonData, null, 2);
                      const yamlString = lsbData.yamlData || '';
                      const highlightedJsonHtml = highlightJson(jsonString);
@@ -659,7 +934,7 @@
                              <button onclick="copyToClipboard(this, document.getElementById('${textId}-raw').value)" class="copy-button float-right">复制文本</button>
                              <span class="copy-feedback float-right mr-2"></span>
                              <textarea id="${textId}-raw" class="copy-textarea" readonly>${escapeHtml(rawFormattedText)}</textarea>
-                             <div id="${textId}">${renderNaiCommand(rawFormattedText)}</div>
+                             <div id="${textId}">${renderNaiCommand(rawFormattedText, formattedDetails)}</div>
                          </div>
                          <div class="mb-3">
                               <h3 class="text-md font-semibold mb-1 text-gray-700 inline-block">原始 LSB JSON 数据:</h3>
@@ -734,7 +1009,12 @@
                           if (typeof value === 'string' && value.trim().startsWith('{') && value.trim().endsWith('}')) { 
                              try { 
                                  const parsedJson = JSON.parse(value); 
-                                 if (!parsedJson.Source) { parsedJson.Source = `From PNG Text Chunk: Comment`; } 
+                                 // NovelAI also stores normal PNG text chunks. Reuse them when stealth
+                                 // metadata was damaged/removed so V5 Source/model detection still works.
+                                 if (!parsedJson.Source && sdPngText.Source) parsedJson.Source = sdPngText.Source;
+                                 if (!parsedJson.Description && sdPngText.Description) parsedJson.Description = sdPngText.Description;
+                                 if (!parsedJson.Software && sdPngText.Software) parsedJson.Software = sdPngText.Software;
+                                 if (!parsedJson.Source) parsedJson.Source = `From PNG Text Chunk: Comment`; 
                                  
                                  // Inject EXIF Description if PNG prompt is missing
                                  if ((!parsedJson.Comment || !parsedJson.Comment.prompt) && sdExif?.Description?.description) {
@@ -743,7 +1023,7 @@
                                      console.log("Injected EXIF Description into PNG Comment JSON for formatting.");
                                  }
 
-                                 const { txt: naiFormattedText } = formatMetadataToText(parsedJson); 
+                                 const { txt: naiFormattedText, details: naiFormattedDetails } = formatMetadataToText(parsedJson); 
                                  const rawNaiFormattedText = naiFormattedText || ''; 
                                  if (rawNaiFormattedText && !rawNaiFormattedText.includes("格式化警告")) { 
                                      const naiAttemptId = generateUniqueId('nai-attempt-png');
@@ -753,7 +1033,7 @@
                                              <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
                                              <span class="copy-feedback float-right mr-2"></span>
                                              <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
-                                             <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText)}</div>
+                                             <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText, naiFormattedDetails)}</div>
                                          </div>`;
                                      dataFound = true; 
                                      naiFormattedFromPng = true; // Mark success
@@ -793,7 +1073,7 @@
                                  delete fakeJson.Comment.prompt;
                              }
 
-                             const { txt: naiFormattedText } = formatMetadataToText(fakeJson);
+                             const { txt: naiFormattedText, details: naiFormattedDetails } = formatMetadataToText(fakeJson);
                              const rawNaiFormattedText = naiFormattedText || ''; 
                              if (rawNaiFormattedText && !rawNaiFormattedText.includes("格式化警告")) { 
                                  const naiAttemptId = generateUniqueId('nai-attempt-exif');
@@ -803,7 +1083,7 @@
                                          <button onclick="copyToClipboard(this, document.getElementById('${naiAttemptId}-raw').value)" class="copy-button float-right">复制文本</button>
                                          <span class="copy-feedback float-right mr-2"></span>
                                          <textarea id="${naiAttemptId}-raw" class="copy-textarea" readonly>${escapeHtml(rawNaiFormattedText)}</textarea>
-                                         <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText)}</div>
+                                         <div id="${naiAttemptId}">${renderNaiCommand(rawNaiFormattedText, naiFormattedDetails)}</div>
                                      </div>`; 
                                  dataFound = true;
                                  naiFormattedFromExif = true; // Mark success
